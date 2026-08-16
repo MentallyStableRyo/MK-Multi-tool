@@ -1,0 +1,19 @@
+node_modules/
+dist/
+app-icon.png
+
+# Rust
+src-tauri/target/
+src-tauri/gen/
+
+# Vendored sidecar binaries (fetched by `npm run binaries`, never committed)
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+
+# Segmentation model + ONNX Runtime WASM (fetched by `npm run model`)
+public/models/
+public/ort/
+
+.DS_Store
+Thumbs.db
+*.log
