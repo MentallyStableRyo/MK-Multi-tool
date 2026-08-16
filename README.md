@@ -5,8 +5,9 @@ lets you pick an exact time range, and renders just that slice to disk. Tauri +
 Rust backend, no server, no uploads — every byte moves between the site's CDN and
 your machine.
 
-It also carries a **Remove Background** tab, which cuts the subject out of an
-image entirely offline — no request leaves the machine at all.
+It also carries two tabs that never touch the network at all: **Remove
+Background**, which cuts the subject out of an image, and **Audio → SRT**, which
+transcribes audio or video into subtitles. Both run their models locally.
 
 ---
 
@@ -159,6 +160,7 @@ ones worth checking by ear.
 
 ```bash
 npm run whisper                                    # binary + all three tiers (~2.1 GB)
+# The installer ships only fast+normal; see "Why the largest model is not in the installer"
 node scripts/fetch-whisper.mjs --tier fast,normal  # skip the large model
 node scripts/fetch-whisper.mjs --binary-only
 node scripts/fetch-whisper.mjs --list
@@ -166,6 +168,30 @@ node scripts/fetch-whisper.mjs --list
 
 Tiers whose model is absent are shown greyed out rather than failing when
 pressed, so a build carrying only Fast is a coherent build.
+
+### Why the largest model is not in the installer
+
+Neither Windows installer format can carry it. Measured, not assumed — both were
+built and both failed:
+
+| Format | Failure | Cap |
+| ------ | -------------------------------------------- | ----------------------- |
+| MSI | `LGHT0306`, CAB finalization | 2 GB, the CAB format |
+| NSIS | `error mmapping file (1955445654, 33554432)` | ~2 GB, 32-bit offsets |
+
+The full payload is about 2.6 GB: 2.2 GB of whisper, 297 MB of FFmpeg and
+yt-dlp, 186 MB of frontend. There is no configuration that fits that into one
+Windows installer, and `msi` is off the target list entirely because it cannot
+build at anything near this size.
+
+So the installer ships **Fast and Normal** (~1.1 GB) and the 1.5 GB
+`ggml-large-v3-turbo.bin` is side-loaded. `binaries.rs` searches the app-data
+directory as well as the bundle, which is user-writable — unlike Program Files,
+which needs elevation — and survives an upgrade. The tab names the exact folder,
+shows the filename it wants, and offers a button to copy the path.
+
+Development builds are unaffected: `npm run whisper` vendors all three into
+`src-tauri/binaries/whisper/models/`, and `tauri dev` resolves them from there.
 
 whisper.cpp does **not** ship through Tauri's `externalBin` like the other
 sidecars do. `externalBin` renames single files and drops them next to the

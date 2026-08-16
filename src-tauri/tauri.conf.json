@@ -32,7 +32,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis", "app", "dmg", "deb", "rpm", "appimage"],
     "category": "Utility",
     "shortDescription": "Precision video slice downloader",
     "longDescription": "Paste a YouTube, Instagram, TikTok, or X link, pick an exact time range, and render just that slice locally using FFmpeg. No servers, no uploads.",
@@ -52,7 +52,8 @@
       "binaries/whisper/*.exe",
       "binaries/whisper/*.dll",
       "binaries/whisper/manifest.json",
-      "binaries/whisper/models/*.bin"
+      "binaries/whisper/models/ggml-base.bin",
+      "binaries/whisper/models/ggml-small.bin"
     ],
     "windows": {
       "nsis": {

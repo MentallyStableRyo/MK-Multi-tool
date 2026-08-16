@@ -110,8 +110,15 @@ fn require(app: &AppHandle, stem: &str) -> Result<PathBuf> {
 }
 
 /// Every directory that might hold the whisper bundle, in priority order.
+///
+/// The app-data directory is in here for a specific reason: neither Windows
+/// installer format can carry the largest speech model. NSIS caps out near 2 GB
+/// (32-bit offsets in makensis) and MSI's CAB at exactly 2 GB, while the full
+/// payload is 2.6 GB. So the two smaller models ship inside the installer and
+/// the large one is side-loaded afterwards into a directory the user can
+/// actually write to — unlike Program Files, which needs elevation.
 fn whisper_dirs(app: &AppHandle) -> Vec<PathBuf> {
-    let mut out = Vec::with_capacity(4);
+    let mut out = Vec::with_capacity(5);
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -122,12 +129,27 @@ fn whisper_dirs(app: &AppHandle) -> Vec<PathBuf> {
         out.push(dir.join("binaries").join(WHISPER_DIR));
         out.push(dir.join(WHISPER_DIR));
     }
+    // Side-loaded models, and the only location here that survives an upgrade.
+    if let Ok(dir) = app.path().app_data_dir() {
+        out.push(dir.join(WHISPER_DIR));
+    }
     out.push(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("binaries")
             .join(WHISPER_DIR),
     );
     out
+}
+
+/// Where a user should drop a model the installer was too large to carry.
+///
+/// Returned to the UI so the message can name a real path rather than describe
+/// one. Created on demand: naming a folder that does not exist invites the user
+/// to mistype it.
+pub fn model_dropbox(app: &AppHandle) -> Option<PathBuf> {
+    let dir = app.path().app_data_dir().ok()?.join(WHISPER_DIR).join(MODEL_DIR);
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
 }
 
 /// The `whisper-cli` executable, wherever the bundle landed.

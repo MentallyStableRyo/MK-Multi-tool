@@ -382,6 +382,7 @@ pub fn cancel_job(registry: State<'_, JobRegistry>, job_id: String) -> bool {
 pub fn transcription_tiers(app: AppHandle) -> Vec<TierStatus> {
     let installed = binaries::installed_models(&app);
     let have_binary = binaries::locate_whisper(&app).is_some();
+    let dropbox = binaries::model_dropbox(&app).map(|p| p.to_string_lossy().into_owned());
 
     [Accuracy::Fast, Accuracy::Normal, Accuracy::Accurate]
         .into_iter()
@@ -393,6 +394,7 @@ pub fn transcription_tiers(app: AppHandle) -> Vec<TierStatus> {
                 model: file.clone(),
                 available: have_binary && installed.iter().any(|m| m == &file),
                 realtime_factor: accuracy.realtime_factor(),
+                install_dir: dropbox.clone(),
             }
         })
         .collect()
@@ -406,6 +408,9 @@ pub struct TierStatus {
     pub model: String,
     pub available: bool,
     pub realtime_factor: f64,
+    /// Where to put this model if it is missing. Same for every tier, but
+    /// carried per-tier so the UI can show it against the one that needs it.
+    pub install_dir: Option<String>,
 }
 
 /// Start a transcription job. Returns its id immediately; progress arrives on

@@ -406,7 +406,9 @@ export class TranscribeView implements Tool {
         if (!tier.available) {
           card.setAttribute("data-unavailable", "");
           card.disabled = true;
-          card.title = `${tier.model} is not installed — run \`npm run whisper\``;
+          card.title = tier.installDir
+            ? `${tier.model} is not installed. Put it in ${tier.installDir} and reopen this tab.`
+            : `${tier.model} is not installed.`;
         }
 
         const name = document.createElement("span");
@@ -426,9 +428,48 @@ export class TranscribeView implements Tool {
 
     const missing = this.state.tiers.filter((t) => !t.available);
     const note = this.pick("tierNote");
-    note.textContent = missing.length
-      ? `${missing.map((t) => t.label).join(" and ")} unavailable — run \`npm run whisper\` to install ${missing.length > 1 ? "those models" : "that model"}.`
-      : "Higher accuracy uses a larger model and searches more candidate transcriptions.";
+    note.replaceChildren();
+
+    if (!missing.length) {
+      note.textContent =
+        "Higher accuracy uses a larger model and searches more candidate transcriptions.";
+      return;
+    }
+
+    const names = missing.map((t) => t.label).join(" and ");
+    const dir = missing.find((t) => t.installDir)?.installDir;
+
+    if (!dir) {
+      note.textContent = `${names} unavailable — the model file is missing.`;
+      return;
+    }
+
+    // Name the exact folder rather than describing it: this is a path the user
+    // has to get right, and the model is too large to have been bundled.
+    note.append(
+      `${names} needs its model file — too large to ship inside the installer. Put `,
+      Object.assign(document.createElement("code"), {
+        textContent: missing.map((t) => t.model).join(" / "),
+      }),
+      " in ",
+      Object.assign(document.createElement("code"), { textContent: dir }),
+      " and reopen this tab. ",
+    );
+
+    const copy = document.createElement("button");
+    copy.className = "link";
+    copy.type = "button";
+    copy.textContent = "Copy folder path";
+    copy.addEventListener("click", () => {
+      void navigator.clipboard.writeText(dir).then(
+        () => {
+          copy.textContent = "Copied";
+          setTimeout(() => (copy.textContent = "Copy folder path"), 1500);
+        },
+        () => (copy.textContent = "Copy failed"),
+      );
+    });
+    note.append(copy);
   }
 
   /** Turn the realtime factor into an estimate for the loaded file. */

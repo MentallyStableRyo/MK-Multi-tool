@@ -121,6 +121,13 @@ export interface TierStatus {
   available: boolean;
   /** Rough multiple of audio duration this tier takes to run. */
   realtimeFactor: number;
+  /**
+   * Writable folder to drop a missing model into.
+   *
+   * Neither Windows installer format can carry the largest model — both cap
+   * below 2 GB — so it is side-loaded here rather than bundled.
+   */
+  installDir: string | null;
 }
 
 export interface TranscribeRequest {
