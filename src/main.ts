@@ -9,10 +9,11 @@
  * another.
  */
 
-import { api, onJobProgress, toErrorPayload } from "./bridge";
+import { api, onJobProgress, onTranscriptReady, toErrorPayload } from "./bridge";
 import { DEFAULT_PLATFORM, PLATFORMS, platformFor } from "./platforms";
 import { RemoveBackgroundView } from "./removebg";
 import { TOOL_TABS, type Actions, type Chrome, type Tool, type ToolId } from "./tool";
+import { TranscribeView } from "./transcribe";
 import type { ErrorPayload, JobEvent } from "./types";
 import { PlatformView } from "./view";
 
@@ -155,7 +156,9 @@ for (const spec of TOOL_TABS) {
   const platform = PLATFORMS.find((candidate) => candidate.id === spec.id);
   const view: Tool = platform
     ? new PlatformView(panel, platform, chrome)
-    : new RemoveBackgroundView(panel, chrome);
+    : spec.id === "transcribe"
+      ? new TranscribeView(panel, chrome)
+      : new RemoveBackgroundView(panel, chrome);
 
   views.set(spec.id, view);
   tabs.set(spec.id, $<HTMLButtonElement>(`tab-${spec.id}`));
@@ -229,6 +232,13 @@ async function boot(): Promise<void> {
   // the job it started.
   void onJobProgress((event: JobEvent) => {
     for (const view of views.values()) view.handleProgress?.(event);
+  });
+
+  // Finished transcripts carry a caption preview the progress event has no room
+  // for, so they arrive on their own channel.
+  void onTranscriptReady((summary) => {
+    const view = views.get("transcribe");
+    if (view instanceof TranscribeView) view.acceptSummary(summary);
   });
 
   select(DEFAULT_PLATFORM);

@@ -110,6 +110,74 @@ more memory.
 
 ---
 
+## Audio → SRT
+
+The sixth tab. Point it at audio — or at video, which FFmpeg strips the audio
+out of first — and it writes a SubRip `.srt` beside it. [whisper.cpp][wcpp] runs
+the speech model as a local binary, the same way yt-dlp and FFmpeg are local
+binaries. Nothing is uploaded.
+
+[wcpp]: https://github.com/ggml-org/whisper.cpp
+
+### Three accuracy tiers
+
+| Tier | Model | Size | Speed | Decoder |
+| ------------- | ---------------- | ------ | ------------------- | ------------------------- |
+| Fast | base | 141 MB | ~7× realtime | greedy, no fallback |
+| Normal | small | 465 MB | ~2× realtime | beam 5 |
+| Very accurate | large-v3-turbo | 1.5 GB | slower than realtime| beam 8, loosened thresholds |
+
+The tiers differ in two ways at once, because model size alone leaves accuracy on
+the table. A larger model reads harder audio; a wider beam search reconsiders
+more candidate transcriptions before committing. The slowest tier also loosens
+the entropy and log-probability thresholds so the decoder *retries* a failing
+window at a higher temperature instead of emitting its first plausible guess —
+which is where most hallucinated text and dropped words come from.
+
+All three are multilingual rather than the `.en` variants, so auto-detect works;
+an English-only model would silently mistranscribe everything else.
+
+### Words per caption
+
+A slider from 1 to 20, defaulting to 7. It is a **ceiling, not a quota**: a
+caption also ends at a sentence boundary once it is at least half full, at a
+silence longer than 900 ms, and at 7 seconds on screen. A subtitle that runs past
+its sentence, or hangs through a pause, reads worse than a short one — but
+nothing ever exceeds the number you set.
+
+This is why the grouping works off whisper's *tokens* rather than its text.
+Tokens are BPE fragments — `" coun"`, `"try"`, `","` — and a token that begins a
+new word carries a leading space. Reassembling words from that, instead of
+splitting the segment text on whitespace, is what keeps each word's own start and
+end timestamps attached to it. Splitting on whitespace would leave every caption
+sharing one segment-wide timespan.
+
+Captions the model was unsure of are flagged in the preview, since those are the
+ones worth checking by ear.
+
+### Setup
+
+```bash
+npm run whisper                                    # binary + all three tiers (~2.1 GB)
+node scripts/fetch-whisper.mjs --tier fast,normal  # skip the large model
+node scripts/fetch-whisper.mjs --binary-only
+node scripts/fetch-whisper.mjs --list
+```
+
+Tiers whose model is absent are shown greyed out rather than failing when
+pressed, so a build carrying only Fast is a coherent build.
+
+whisper.cpp does **not** ship through Tauri's `externalBin` like the other
+sidecars do. `externalBin` renames single files and drops them next to the
+executable, and `whisper-cli` dynamically loads `whisper.dll` plus a set of
+`ggml-cpu-*` backends chosen at runtime from the host's instruction set — so it
+only works with its siblings beside it. The whole directory travels as a bundle
+resource instead, and `binaries.rs` resolves that layout. On macOS, where
+whisper.cpp publishes no prebuilt binary, `brew install whisper-cpp` puts one on
+`PATH` and the same resolver finds it.
+
+---
+
 ## How it works
 
 The interesting part is what the app *doesn't* do: it never downloads the whole
@@ -260,6 +328,10 @@ npm run binaries
 # Vendor the segmentation models + ONNX Runtime into public/ (Remove Background)
 # ~175 MB; use `--model u2netp` for the 4.4 MB fast tier alone
 npm run model
+
+# Vendor whisper.cpp + speech models into src-tauri/binaries/ (Audio → SRT)
+# ~2.1 GB; use `--tier fast` for the 141 MB tier alone
+npm run whisper
 
 # Generate app-icon.png and expand it into every platform icon format
 npm run icon
@@ -482,6 +554,7 @@ src/                    Frontend (TypeScript, no framework — ~57 KB bundled)
   preview.ts            The live YouTube player, driven over postMessage
   removebg.ts           The Remove Background workspace
   matte.ts              Local segmentation: lazy ONNX Runtime, U²-Net, compositing
+  transcribe.ts         The Audio → SRT workspace
   bridge.ts             The only place that talks to Rust
   timeline.ts           Dual-handle range scrubber with a live playhead
   time.ts               Timecode parsing/formatting, mirrors timecode.rs
@@ -493,6 +566,8 @@ src-tauri/src/
   platform.rs           Per-site link rules, one per tab
   youtube.rs            yt-dlp resolution and the quality model
   render.rs             Cut planning and the FFmpeg invocation
+  transcribe.rs         Audio → SRT: decode, run whisper.cpp, group captions
+  srt.rs                Tokens → words → captions → SRT (pure, unit-tested)
   probe.rs              ffprobe keyframe and duration queries
   disk.rs               Free-space verification
   staging.rs            Atomic output commits
@@ -507,6 +582,7 @@ src-tauri/src/
 scripts/
   fetch-binaries.mjs    Vendors sidecars for the host triple
   fetch-model.mjs       Vendors the segmentation model + ONNX Runtime into public/
+  fetch-whisper.mjs     Vendors whisper.cpp + speech models into src-tauri/binaries/
   gen-icon.mjs          Generates app-icon.png (hand-rolled PNG encoder)
 
 public/                 Gitignored build inputs, served from the app's own origin

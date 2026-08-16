@@ -48,7 +48,12 @@
       "binaries/ffmpeg",
       "binaries/ffprobe"
     ],
-    "resources": [],
+    "resources": [
+      "binaries/whisper/*.exe",
+      "binaries/whisper/*.dll",
+      "binaries/whisper/manifest.json",
+      "binaries/whisper/models/*.bin"
+    ],
     "windows": {
       "nsis": {
         "installMode": "perMachine"

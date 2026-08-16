@@ -15,7 +15,7 @@
 import { PLATFORMS, type PlatformId } from "./platforms";
 import type { JobEvent } from "./types";
 
-export type ToolId = PlatformId | "removebg";
+export type ToolId = PlatformId | "removebg" | "transcribe";
 
 /** What the shared action bar should show for the active tool. */
 export interface Actions {
@@ -97,6 +97,13 @@ const REMOVEBG_ICON =
   '<path d="M10.4 2.2h3.4v3.4" fill="none" stroke="currentColor" stroke-width="1.4" ' +
   'stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1.6 1.5"/>';
 
+/** A waveform with a caption bar beneath it. */
+const TRANSCRIBE_ICON =
+  '<path d="M2.4 6.6v2.8M5 4.4v7.2M7.6 6.1v3.8M10.2 5.2v5.6M12.8 7v2" fill="none" ' +
+  'stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>' +
+  '<path d="M2.6 14h10.8" fill="none" stroke="currentColor" stroke-width="1.4" ' +
+  'stroke-linecap="round" stroke-dasharray="3.2 1.6"/>';
+
 export const TOOL_TABS: readonly TabSpec[] = [
   ...PLATFORMS.map((platform) => ({
     id: platform.id,
@@ -108,5 +115,10 @@ export const TOOL_TABS: readonly TabSpec[] = [
     label: "Remove BG",
     icon: REMOVEBG_ICON,
     startsGroup: true,
+  },
+  {
+    id: "transcribe",
+    label: "Audio → SRT",
+    icon: TRANSCRIBE_ICON,
   },
 ];

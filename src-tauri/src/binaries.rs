@@ -27,6 +27,19 @@ const EXE_SUFFIX: &str = "";
 pub const YTDLP: &str = "yt-dlp";
 pub const FFMPEG: &str = "ffmpeg";
 pub const FFPROBE: &str = "ffprobe";
+pub const WHISPER: &str = "whisper-cli";
+
+/// whisper.cpp is not a lone sidecar.
+///
+/// `whisper-cli` dynamically loads `whisper.dll`/`libwhisper.so` and a set of
+/// `ggml-cpu-*` backends chosen at runtime from the host's instruction set, so
+/// it only works with its siblings beside it. Tauri's `externalBin` lays down
+/// single renamed files and cannot express that, so the whole directory travels
+/// as a bundle resource and is resolved here instead.
+const WHISPER_DIR: &str = "whisper";
+
+/// Speech models live beside the binary that reads them.
+const MODEL_DIR: &str = "models";
 
 /// Resolved absolute paths to every tool the pipeline needs.
 #[derive(Debug, Clone)]
@@ -94,6 +107,73 @@ fn require(app: &AppHandle, stem: &str) -> Result<PathBuf> {
     locate(app, stem).ok_or_else(|| AppError::MissingBinary {
         name: stem.to_string(),
     })
+}
+
+/// Every directory that might hold the whisper bundle, in priority order.
+fn whisper_dirs(app: &AppHandle) -> Vec<PathBuf> {
+    let mut out = Vec::with_capacity(4);
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            out.push(dir.join(WHISPER_DIR));
+        }
+    }
+    if let Ok(dir) = app.path().resource_dir() {
+        out.push(dir.join("binaries").join(WHISPER_DIR));
+        out.push(dir.join(WHISPER_DIR));
+    }
+    out.push(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("binaries")
+            .join(WHISPER_DIR),
+    );
+    out
+}
+
+/// The `whisper-cli` executable, wherever the bundle landed.
+pub fn locate_whisper(app: &AppHandle) -> Option<PathBuf> {
+    let file = format!("{WHISPER}{EXE_SUFFIX}");
+    for dir in whisper_dirs(app) {
+        let candidate = dir.join(&file);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    which::which(WHISPER).ok()
+}
+
+pub fn require_whisper(app: &AppHandle) -> Result<PathBuf> {
+    locate_whisper(app).ok_or_else(|| AppError::MissingBinary {
+        name: WHISPER.to_string(),
+    })
+}
+
+/// A ggml speech model by filename, e.g. `ggml-small.bin`.
+pub fn locate_model(app: &AppHandle, file: &str) -> Option<PathBuf> {
+    for dir in whisper_dirs(app) {
+        let candidate = dir.join(MODEL_DIR).join(file);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Which speech models are actually installed, as bare filenames.
+pub fn installed_models(app: &AppHandle) -> Vec<String> {
+    let mut found = Vec::new();
+    for dir in whisper_dirs(app) {
+        let Ok(entries) = std::fs::read_dir(dir.join(MODEL_DIR)) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with("ggml-") && name.ends_with(".bin") && !found.contains(&name) {
+                found.push(name);
+            }
+        }
+    }
+    found
 }
 
 /// Resolve the full toolchain, failing with a named missing binary.

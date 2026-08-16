@@ -107,3 +107,51 @@ export interface JobEvent {
 
 /** Containers that discard the video stream. */
 export const AUDIO_CONTAINERS: ReadonlySet<Container> = new Set<Container>(["m4a", "mp3"]);
+
+// ------------------------------------------------------------- transcription
+
+/** How hard the speech model works. Mirrors `transcribe::Accuracy`. */
+export type Accuracy = "fast" | "normal" | "accurate";
+
+/** One tier, and whether its model is actually installed. */
+export interface TierStatus {
+  id: Accuracy;
+  label: string;
+  model: string;
+  available: boolean;
+  /** Rough multiple of audio duration this tier takes to run. */
+  realtimeFactor: number;
+}
+
+export interface TranscribeRequest {
+  inputPath: string;
+  accuracy: Accuracy;
+  wordsPerCaption: number;
+  /** BCP-47-ish code, or `auto` to detect. */
+  language: string;
+  translate: boolean;
+  outputPath: string;
+}
+
+export interface PreviewCaption {
+  index: number;
+  start: string;
+  end: string;
+  text: string;
+  confidence: number;
+}
+
+/** Emitted on `mk://transcript-ready` when a transcription finishes. */
+export interface TranscriptSummary {
+  captions: number;
+  words: number;
+  language: string;
+  durationMs: number;
+  confidence: number;
+  preview: PreviewCaption[];
+  outputPath: string;
+}
+
+/** Bounds the backend clamps `wordsPerCaption` to. */
+export const MIN_WORDS_PER_CAPTION = 1;
+export const MAX_WORDS_PER_CAPTION = 20;

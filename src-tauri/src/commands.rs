@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use serde::Deserialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::binaries::{self, Toolchain, ToolchainStatus};
@@ -19,9 +19,11 @@ use crate::error::{AppError, Result};
 use crate::jobs::{self, JobEvent, JobRegistry, Stage};
 use crate::pipeline;
 use crate::platform::Platform;
+use crate::probe;
 use crate::render::{Container, Precision};
 use crate::staging;
 use crate::timecode::{self, Range};
+use crate::transcribe::{self, Accuracy};
 use crate::youtube::{self, CookieOptions, VideoInfo};
 
 /// Minimum gap between progress events. At ~10 Hz the bar looks smooth without
@@ -366,6 +368,143 @@ async fn run_slice(
 #[tauri::command]
 pub fn cancel_job(registry: State<'_, JobRegistry>, job_id: String) -> bool {
     registry.cancel(&job_id)
+}
+
+// ---------------------------------------------------------------------------
+// Transcription
+// ---------------------------------------------------------------------------
+
+/// Which speech tiers are usable right now.
+///
+/// The models are large enough that a user may reasonably install only some of
+/// them, so the UI asks rather than assuming, and offers only what will work.
+#[tauri::command]
+pub fn transcription_tiers(app: AppHandle) -> Vec<TierStatus> {
+    let installed = binaries::installed_models(&app);
+    let have_binary = binaries::locate_whisper(&app).is_some();
+
+    [Accuracy::Fast, Accuracy::Normal, Accuracy::Accurate]
+        .into_iter()
+        .map(|accuracy| {
+            let file = format!("{}.bin", accuracy.model_stem());
+            TierStatus {
+                id: accuracy,
+                label: accuracy.label().to_string(),
+                model: file.clone(),
+                available: have_binary && installed.iter().any(|m| m == &file),
+                realtime_factor: accuracy.realtime_factor(),
+            }
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TierStatus {
+    pub id: Accuracy,
+    pub label: String,
+    pub model: String,
+    pub available: bool,
+    pub realtime_factor: f64,
+}
+
+/// Start a transcription job. Returns its id immediately; progress arrives on
+/// the same channel as slice renders.
+#[tauri::command]
+pub async fn start_transcription(
+    app: AppHandle,
+    registry: State<'_, JobRegistry>,
+    request: transcribe::TranscribeRequest,
+) -> Result<String> {
+    let input = PathBuf::from(&request.input_path);
+    if !input.is_file() {
+        return Err(AppError::other(format!(
+            "That file no longer exists: {}",
+            request.input_path
+        )));
+    }
+
+    // Fail here, synchronously, rather than one event into a job the user is
+    // already watching.
+    let toolchain = binaries::resolve(&app)?;
+    binaries::require_whisper(&app)?;
+    transcribe::model_path(&app, request.accuracy)?;
+
+    let output_path = PathBuf::from(&request.output_path);
+    let parent = output_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| AppError::other("Output path has no folder component"))?;
+    if !parent.is_dir() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let job_id = uuid::Uuid::new_v4().to_string();
+    let cancel = registry.register(&job_id);
+
+    // Duration turns whisper's segment timestamps into a percentage. A file we
+    // cannot probe still transcribes; it just reports an indeterminate bar.
+    let duration_ms = probe::local_duration(&toolchain, &input, &cancel)
+        .await
+        .map(|s| (s * 1000.0) as i64)
+        .unwrap_or(0);
+
+    let task_app = app.clone();
+    let task_id = job_id.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let mut last_emit = Instant::now() - PROGRESS_INTERVAL;
+
+        let result = transcribe::run(
+            &task_app,
+            &toolchain,
+            &request,
+            duration_ms,
+            &cancel,
+            |fraction, step| {
+                // whisper emits a line per segment, which on dense speech is
+                // far faster than the UI needs.
+                if last_emit.elapsed() < PROGRESS_INTERVAL && fraction < 1.0 {
+                    return;
+                }
+                last_emit = Instant::now();
+                jobs::emit(
+                    &task_app,
+                    JobEvent::new(&task_id, Stage::Rendering, step).percent(fraction * 100.0),
+                );
+            },
+        )
+        .await;
+
+        match result {
+            Ok(summary) => {
+                let message = format!(
+                    "{} captions from {} words",
+                    summary.captions, summary.words
+                );
+                jobs::emit(
+                    &task_app,
+                    JobEvent::new(&task_id, Stage::Done, message)
+                        .percent(100.0)
+                        .output(summary.output_path.clone()),
+                );
+                // The summary rides its own event so the UI can show a preview
+                // without reading the file back off disk.
+                let _ = task_app.emit("mk://transcript-ready", &summary);
+            }
+            Err(error) if error.is_cancelled() => {
+                jobs::emit(
+                    &task_app,
+                    JobEvent::new(&task_id, Stage::Cancelled, "Cancelled"),
+                );
+            }
+            Err(error) => jobs::emit(&task_app, JobEvent::failure(&task_id, &error)),
+        }
+
+        task_app.state::<JobRegistry>().finish(&task_id);
+    });
+
+    Ok(job_id)
 }
 
 /// Write raw bytes the frontend produced to a path the user chose.

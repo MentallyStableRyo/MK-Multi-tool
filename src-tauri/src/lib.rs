@@ -37,8 +37,10 @@ mod platform;
 mod probe;
 mod proc;
 mod render;
+mod srt;
 mod staging;
 mod timecode;
+mod transcribe;
 mod youtube;
 
 /// Network-backed end-to-end test. Ignored by default; see the module docs.
@@ -71,6 +73,8 @@ pub fn run() {
             commands::analyze_url,
             commands::start_slice,
             commands::cancel_job,
+            commands::transcription_tiers,
+            commands::start_transcription,
             commands::write_file,
             commands::reveal_in_folder,
         ])

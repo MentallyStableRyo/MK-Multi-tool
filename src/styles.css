@@ -1079,6 +1079,149 @@ details.advanced .content {
   object-fit: contain;
 }
 
+/* ---------------------------------------------------------- audio → srt */
+
+.field-block {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 14px;
+}
+
+.field-label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* Three accuracy cards. Each states its cost, because the difference between
+   them is minutes of waiting, not a preference. */
+.tier-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.tier {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.tier:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.tier.active {
+  border-color: var(--accent);
+  background: rgb(109 124 255 / 0.1);
+  color: var(--text);
+}
+
+.tier:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.tier-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tier-detail {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-family: var(--mono);
+}
+
+.caption-row {
+  align-items: flex-start;
+}
+
+.caption-row .field {
+  gap: 7px;
+}
+
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.check input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* --------------------------------------------------------- srt preview */
+
+.srt-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  max-height: 34vh;
+  overflow-y: auto;
+  user-select: text;
+}
+
+.srt-row {
+  display: grid;
+  grid-template-columns: minmax(0, 190px) 1fr;
+  gap: 12px;
+  padding: 5px 4px;
+  border-radius: 4px;
+  font-size: 12.5px;
+}
+
+.srt-row:nth-child(odd) {
+  background: rgb(255 255 255 / 0.02);
+}
+
+.srt-time {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.srt-text {
+  color: var(--text);
+}
+
+/* Low-confidence captions are the ones worth checking by ear. */
+.srt-row.shaky .srt-text {
+  color: var(--warn);
+}
+
+.srt-row.shaky::after {
+  content: "?";
+  color: var(--warn);
+  font-weight: 700;
+}
+
 /* Thin, unobtrusive scrollbar. */
 main::-webkit-scrollbar {
   width: 10px;

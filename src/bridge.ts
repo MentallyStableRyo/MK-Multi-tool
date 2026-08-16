@@ -14,11 +14,15 @@ import type {
   ErrorPayload,
   JobEvent,
   SliceRequest,
+  TierStatus,
   ToolchainStatus,
+  TranscribeRequest,
+  TranscriptSummary,
   VideoInfo,
 } from "./types";
 
 const PROGRESS_EVENT = "mk://job-progress";
+const TRANSCRIPT_EVENT = "mk://transcript-ready";
 
 /** Coerce anything thrown across the IPC boundary into an `ErrorPayload`. */
 export function toErrorPayload(value: unknown): ErrorPayload {
@@ -61,6 +65,12 @@ export const api = {
 
   cancelJob: (jobId: string) => call<boolean>("cancel_job", { jobId }),
 
+  /** Which speech tiers have their model installed. */
+  transcriptionTiers: () => call<TierStatus[]>("transcription_tiers"),
+
+  startTranscription: (request: TranscribeRequest) =>
+    call<string>("start_transcription", { request }),
+
   /**
    * Write frontend-produced bytes to a path the user picked in a save dialog.
    *
@@ -97,4 +107,16 @@ function toBase64(bytes: Uint8Array): string {
  */
 export function onJobProgress(handler: (event: JobEvent) => void): Promise<UnlistenFn> {
   return listen<JobEvent>(PROGRESS_EVENT, (message) => handler(message.payload));
+}
+
+/**
+ * Subscribe to finished transcripts.
+ *
+ * The summary rides its own channel rather than the progress event, which has a
+ * fixed shape shared with slice renders and no room for a caption preview.
+ */
+export function onTranscriptReady(
+  handler: (summary: TranscriptSummary) => void,
+): Promise<UnlistenFn> {
+  return listen<TranscriptSummary>(TRANSCRIPT_EVENT, (message) => handler(message.payload));
 }
