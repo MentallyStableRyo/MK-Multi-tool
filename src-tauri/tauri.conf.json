@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "MK Multi-tool",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "identifier": "com.mk.multitool",
   "build": {
     "beforeDevCommand": "npm run vite:dev",
