@@ -31,6 +31,14 @@ export interface Platform {
    * therefore built for YouTube alone, and simply does not exist elsewhere.
    */
   readonly preview: boolean;
+  /**
+   * Whether the source box also accepts a keyword search.
+   *
+   * yt-dlp exposes a first-class `ytsearch:` scheme, so YouTube gets this for
+   * free. The other three have no equivalent that returns structured results
+   * without scraping a search page, so their box stays link-only.
+   */
+  readonly search: boolean;
   /** Seconds pre-selected after analysis; `"full"` takes the whole clip. */
   readonly defaultSpan: number | "full";
   /** What a signed-in session buys here, shown under Advanced. */
@@ -44,9 +52,10 @@ export const PLATFORMS: readonly Platform[] = [
     icon:
       '<rect x="1.5" y="3.75" width="13" height="8.5" rx="2.75" fill="none" stroke="currentColor" stroke-width="1.4"/>' +
       '<path d="M6.9 6.2v3.6L10.1 8z" fill="currentColor"/>',
-    placeholder: "Paste a YouTube link — watch, youtu.be, shorts, or live",
+    placeholder: "Paste a YouTube link, or type to search",
     matches: /(?:^|\/\/|\.)(?:youtube\.com|youtu\.be)/i,
     preview: true,
+    search: true,
     defaultSpan: 30,
     cookieNote:
       "Cookies let the app open private, members-only, or age-restricted videos using a session " +
@@ -62,6 +71,7 @@ export const PLATFORMS: readonly Platform[] = [
     placeholder: "Paste an Instagram link — post, reel, or IGTV",
     matches: /(?:^|\/\/|\.)instagram\.com/i,
     preview: false,
+    search: false,
     defaultSpan: "full",
     cookieNote:
       "Instagram serves almost nothing to a signed-out client, so a browser session is usually " +
@@ -76,6 +86,7 @@ export const PLATFORMS: readonly Platform[] = [
     placeholder: "Paste a TikTok link — a video URL or a vm./vt. short link",
     matches: /(?:^|\/\/|\.)(?:tiktok\.com)/i,
     preview: false,
+    search: false,
     defaultSpan: "full",
     cookieNote:
       "Cookies help with posts that are region-locked or restricted to followers, and reduce how " +
@@ -89,6 +100,7 @@ export const PLATFORMS: readonly Platform[] = [
     placeholder: "Paste an X link — a post URL containing a video",
     matches: /(?:^|\/\/|\.)(?:twitter\.com|x\.com)/i,
     preview: false,
+    search: false,
     defaultSpan: "full",
     cookieNote:
       "X hides media on protected accounts and some age-gated posts from signed-out clients; " +

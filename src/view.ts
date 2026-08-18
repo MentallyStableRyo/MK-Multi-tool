@@ -35,6 +35,7 @@ import {
   type JobEvent,
   type Precision,
   type QualityTrack,
+  type SearchResult,
   type VideoInfo,
 } from "./types";
 
@@ -53,6 +54,16 @@ interface ViewState {
   transcodeAv1: boolean;
   jobId: string | null;
   analyzing: boolean;
+  searching: boolean;
+  /**
+   * Job id for the in-flight analyse or search.
+   *
+   * Separate from `jobId`, which belongs to the render: a metadata fetch and a
+   * slice can never be cancelled by the same button, and conflating them would
+   * let one cancel the other.
+   */
+  sourceJobId: string | null;
+  results: SearchResult[];
 }
 
 /** Seconds of context shown before the cut point by the "End scene" button. */
@@ -72,6 +83,29 @@ const STAGE_LABELS: Record<JobEvent["stage"], string> = {
 };
 
 type PreviewKind = "slice" | "start" | "end";
+
+/**
+ * Whether the source box holds a link rather than a search phrase.
+ *
+ * Deliberately loose: the backend does the authoritative validation, and this
+ * only has to choose which of the two requests to send. A scheme is not
+ * required, so `youtu.be/xyz` still reads as a link — but a trailing path
+ * segment is, which keeps a query like "node.js tutorial" out of the URL path.
+ */
+function looksLikeUrl(text: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(text) || /^[\w-]+(?:\.[\w-]+)+\//.test(text);
+}
+
+/**
+ * Short view count for a dense result row — `1.2M` rather than `1,234,567`.
+ *
+ * The metadata card keeps the full `toLocaleString` form; it has one video to
+ * describe and the room to do it.
+ */
+function formatCount(n: number): string {
+  return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 })
+    .format(n);
+}
 
 // ---------------------------------------------------------------- markup
 
@@ -110,10 +144,18 @@ function markup(platform: Platform): string {
     <section class="card">
       <h2 class="card-title">1 · Source</h2>
       <div class="row">
-        <input class="grow" type="url" data-el="urlInput" spellcheck="false" autocomplete="off"
-               placeholder="${platform.placeholder}" />
+        <input class="grow" type="${platform.search ? "text" : "url"}" data-el="urlInput"
+               spellcheck="false" autocomplete="off" placeholder="${platform.placeholder}" />
         <button class="primary" data-el="analyzeBtn">Analyse</button>
+        <button class="danger" data-el="sourceCancelBtn" hidden>Cancel</button>
       </div>
+      ${
+        platform.search
+          ? `
+      <p class="hint" data-el="searchNote" hidden></p>
+      <div class="results" data-el="searchResults" hidden role="list"></div>`
+          : ""
+      }
     </section>
 
     <section class="card" data-el="metaCard" hidden>
@@ -294,6 +336,9 @@ export class PlatformView implements Tool {
       transcodeAv1: false,
       jobId: null,
       analyzing: false,
+      searching: false,
+      sourceJobId: null,
+      results: [],
     };
 
     root.classList.add("panel");
@@ -701,9 +746,20 @@ export class PlatformView implements Tool {
       !busy &&
       !this.state.info.isLive;
 
+    const working = this.state.analyzing || this.state.searching;
     const analyzeBtn = this.pick<HTMLButtonElement>("analyzeBtn");
-    analyzeBtn.disabled = this.state.analyzing || busy || !this.chrome.ready();
-    analyzeBtn.textContent = this.state.analyzing ? "Analysing…" : "Analyse";
+    analyzeBtn.disabled = working || busy || !this.chrome.ready();
+    analyzeBtn.textContent = this.state.analyzing
+      ? "Analysing…"
+      : this.state.searching
+        ? "Searching…"
+        : this.searchMode()
+          ? "Search"
+          : "Analyse";
+
+    // Only shown while something is in flight, so there is never a cancel
+    // button sitting there with nothing to cancel.
+    this.pick("sourceCancelBtn").hidden = !working;
 
     this.chrome.setActions(this, {
       canChoose: this.state.info !== null && !busy,
@@ -733,18 +789,64 @@ export class PlatformView implements Tool {
 
   // -------------------------------------------------------------- analysis
 
+  /** True when the box holds a search phrase rather than a link. */
+  private searchMode(): boolean {
+    return this.platform.search && !looksLikeUrl(this.input("urlInput").value.trim());
+  }
+
+  /** Route the box's contents: a link analyses, anything else searches. */
+  private submitSource(): void {
+    if (this.state.analyzing || this.state.searching) return;
+    const text = this.input("urlInput").value.trim();
+    if (!text) return;
+
+    if (this.searchMode()) void this.search(text);
+    else void this.analyze();
+  }
+
+  private async search(query: string): Promise<void> {
+    const jobId = crypto.randomUUID();
+    this.state.searching = true;
+    this.state.sourceJobId = jobId;
+    this.showError(null);
+    this.setSearchNote("Searching…");
+    this.syncActions();
+
+    try {
+      this.state.results = await api.searchYoutube(jobId, query, this.cookieOptions());
+      this.renderResults(query);
+    } catch (raw) {
+      const error = toErrorPayload(raw);
+      this.state.results = [];
+      this.renderResults(query);
+      // A cancel is the user's own doing, so it is a note rather than an error.
+      if (error.kind === "cancelled") {
+        this.setSearchNote("Search cancelled.");
+      } else {
+        this.setSearchNote("");
+        this.showError(error);
+      }
+    } finally {
+      this.state.searching = false;
+      this.state.sourceJobId = null;
+      this.syncActions();
+    }
+  }
+
   private async analyze(): Promise<void> {
     const url = this.input("urlInput").value.trim();
     if (!url || this.state.analyzing) return;
 
+    const jobId = crypto.randomUUID();
     this.state.analyzing = true;
+    this.state.sourceJobId = jobId;
     this.showError(null);
     // A player left open would be showing a completely different video.
     this.closePreview();
     this.syncActions();
 
     try {
-      const info = await api.analyzeUrl(url, this.platform.id, this.cookieOptions());
+      const info = await api.analyzeUrl(jobId, url, this.platform.id, this.cookieOptions());
       this.state.info = info;
 
       // Short-form posts are meant to be taken whole; long videos get a 30s
@@ -771,14 +873,99 @@ export class PlatformView implements Tool {
         });
       }
     } catch (raw) {
+      const error = toErrorPayload(raw);
       this.state.info = null;
       this.state.track = null;
       this.syncMetadata();
-      this.showError(toErrorPayload(raw));
+      if (error.kind !== "cancelled") this.showError(error);
     } finally {
       this.state.analyzing = false;
+      this.state.sourceJobId = null;
       this.syncActions();
     }
+  }
+
+  // --------------------------------------------------------------- search
+
+  private setSearchNote(text: string): void {
+    if (!this.platform.search) return;
+    const note = this.pick("searchNote");
+    note.textContent = text;
+    note.hidden = text === "";
+  }
+
+  /**
+   * Draw the result rows.
+   *
+   * Rows are buttons rather than links: picking one fills the box and runs the
+   * normal analyse path, so a search is a way of reaching a URL rather than a
+   * second, parallel route into the slice controls.
+   */
+  private renderResults(query: string): void {
+    if (!this.platform.search) return;
+
+    const list = this.pick("searchResults");
+    list.replaceChildren();
+
+    if (!this.state.results.length) {
+      list.hidden = true;
+      // Callers that end a search some other way — cancelled, failed — replace
+      // this note afterwards, so it is safe to state the plain case here.
+      this.setSearchNote(`No results for “${query}”.`);
+      return;
+    }
+
+    for (const hit of this.state.results) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "result";
+      row.setAttribute("role", "listitem");
+
+      const thumb = document.createElement("img");
+      thumb.className = "result-thumb";
+      thumb.alt = "";
+      thumb.loading = "lazy";
+      if (hit.thumbnail) thumb.src = hit.thumbnail;
+
+      const body = document.createElement("div");
+      body.className = "result-body";
+
+      const title = document.createElement("span");
+      title.className = "result-title";
+      title.textContent = hit.title;
+
+      const meta = document.createElement("span");
+      meta.className = "result-meta";
+      meta.textContent = [
+        hit.channel,
+        hit.live ? "LIVE" : hit.duration ? formatClock(hit.duration) : null,
+        hit.viewCount ? `${formatCount(hit.viewCount)} views` : null,
+      ]
+        .filter((part): part is string => Boolean(part))
+        .join(" · ");
+
+      body.append(title, meta);
+      row.append(thumb, body);
+
+      row.addEventListener("click", () => {
+        this.input("urlInput").value = hit.url;
+        this.clearResults();
+        void this.analyze();
+      });
+
+      list.append(row);
+    }
+
+    list.hidden = false;
+    this.setSearchNote(`${this.state.results.length} results — pick one to load it.`);
+  }
+
+  private clearResults(): void {
+    if (!this.platform.search) return;
+    this.state.results = [];
+    this.pick("searchResults").replaceChildren();
+    this.pick("searchResults").hidden = true;
+    this.setSearchNote("");
   }
 
   private populateQualities(info: VideoInfo): void {
@@ -942,10 +1129,20 @@ export class PlatformView implements Tool {
   private wire(): void {
     const urlInput = this.input("urlInput");
 
-    this.pick("analyzeBtn").addEventListener("click", () => void this.analyze());
+    this.pick("analyzeBtn").addEventListener("click", () => this.submitSource());
 
     urlInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") void this.analyze();
+      if (e.key === "Enter") this.submitSource();
+    });
+
+    // The button reads "Search" or "Analyse" depending on what is typed, so it
+    // has to re-evaluate as the box changes rather than only on submit.
+    if (this.platform.search) {
+      urlInput.addEventListener("input", () => this.syncActions());
+    }
+
+    this.pick("sourceCancelBtn").addEventListener("click", () => {
+      if (this.state.sourceJobId) void api.cancelJob(this.state.sourceJobId);
     });
 
     // Pasting a link is an unambiguous intent to analyse it — and if it belongs

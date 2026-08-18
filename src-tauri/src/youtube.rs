@@ -215,10 +215,13 @@ pub struct StreamSet {
 // yt-dlp invocation
 // ---------------------------------------------------------------------------
 
-/// Base flags applied to every yt-dlp call.
-fn base_args() -> Vec<String> {
+/// Flags applied to every yt-dlp call.
+///
+/// Split out from [`base_args`] because search is the one caller that must not
+/// pass `--no-playlist`: a `ytsearch:` query *is* a playlist, and suppressing
+/// it collapses the results to a single entry.
+fn common_args() -> Vec<String> {
     [
-        "--no-playlist",
         "--no-warnings",
         "--no-progress",
         "--ignore-config",
@@ -233,6 +236,127 @@ fn base_args() -> Vec<String> {
     .map(|s| s.to_string())
     .collect()
 }
+
+/// Base flags for the single-video calls: everything in [`common_args`], plus
+/// the guard that keeps a link with a playlist in it from expanding.
+fn base_args() -> Vec<String> {
+    let mut args = common_args();
+    args.push("--no-playlist".into());
+    args
+}
+
+/// One hit from a keyword search, before any format resolution.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResult {
+    pub id: String,
+    /// Canonical watch URL, ready to hand to the existing analyze path.
+    pub url: String,
+    pub title: String,
+    pub channel: Option<String>,
+    /// Seconds. `None` for a live stream, which has no final duration yet.
+    pub duration: Option<f64>,
+    pub view_count: Option<f64>,
+    pub thumbnail: Option<String>,
+    pub live: bool,
+}
+
+/// Largest number of hits a single search may ask for.
+///
+/// yt-dlp resolves the result page in one request, but the page itself is
+/// paginated at 20, so asking for much more turns one round trip into several.
+const MAX_SEARCH_RESULTS: usize = 20;
+
+/// Search YouTube by keyword.
+///
+/// `--flat-playlist` is what keeps this fast: yt-dlp reads the result page and
+/// stops, rather than visiting all twenty videos to build full format tables.
+/// That is enough for a title, channel, duration and thumbnail — the real
+/// metadata fetch happens in [`dump_json`] once the user picks one.
+pub async fn search(
+    tc: &Toolchain,
+    query: &str,
+    cookies: &CookieOptions,
+    cancel: &CancellationToken,
+) -> Result<Vec<SearchResult>> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut args = common_args();
+    args.push("--flat-playlist".into());
+    args.push("--dump-json".into());
+    cookies.apply(&mut args);
+    // yt-dlp's own search scheme, so there is no URL to build and no HTML to
+    // scrape. The query rides as a single argument and is never shell-parsed.
+    args.push(format!("ytsearch{MAX_SEARCH_RESULTS}:{query}"));
+
+    let mut cmd = proc::command(&tc.ytdlp);
+    cmd.args(&args);
+
+    let out = proc::run_streaming(cmd, cancel, |_| {}).await?;
+
+    if !out.ok() {
+        let kind = YtErrorKind::classify(&out.stderr);
+        return Err(AppError::Youtube {
+            kind,
+            message: match kind {
+                YtErrorKind::NotFound => format!("No results for “{query}”."),
+                _ => friendly_message(Platform::Youtube, kind, &out.stderr),
+            },
+        });
+    }
+
+    // `--dump-json` under `--flat-playlist` emits one object per line rather
+    // than one document, so a single malformed entry costs that result instead
+    // of the whole search.
+    Ok(out
+        .stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|entry| parse_search_entry(&entry))
+        .collect())
+}
+
+/// Shape one flat-playlist entry into a [`SearchResult`], or drop it.
+///
+/// Only the id is load-bearing — everything else has a sane absence — so a
+/// result missing a title or thumbnail still shows up rather than vanishing.
+fn parse_search_entry(entry: &Value) -> Option<SearchResult> {
+    let id = as_str(entry, "id")?.to_string();
+
+    // Flat entries usually carry `url`, but not always; the id is enough to
+    // rebuild the canonical form, and the analyze path normalizes either.
+    let url = as_str(entry, "url")
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("https://www.youtube.com/watch?v={id}"));
+
+    let live = entry
+        .get("is_live")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    Some(SearchResult {
+        id,
+        url,
+        title: as_str(entry, "title").unwrap_or("Untitled").to_string(),
+        channel: as_str(entry, "channel")
+            .or_else(|| as_str(entry, "uploader"))
+            .map(str::to_string),
+        duration: as_f64(entry, "duration").filter(|d| *d > 0.0),
+        view_count: as_f64(entry, "view_count"),
+        thumbnail: pick_thumbnail_within(entry, SEARCH_THUMB_WIDTH),
+        live,
+    })
+}
+
+/// Widest thumbnail that still suits a result row.
+///
+/// Capped where the single-video preview is not: twenty uncapped hits would
+/// pull twenty maxres stills for images rendered barely 160px wide.
+const SEARCH_THUMB_WIDTH: f64 = 480.0;
 
 /// Run `yt-dlp -J` and return the parsed metadata document.
 ///
@@ -447,11 +571,22 @@ fn bitrate(f: &Value) -> f64 {
 }
 
 fn pick_thumbnail(root: &Value) -> Option<String> {
+    pick_thumbnail_within(root, f64::INFINITY)
+}
+
+/// Largest thumbnail no wider than `max_width`, falling back to whatever single
+/// `thumbnail` string the document carries.
+///
+/// An entry with no declared width is treated as acceptable rather than
+/// discarded — yt-dlp omits the field on some extractors, and dropping those
+/// would leave a result with no image at all.
+fn pick_thumbnail_within(root: &Value, max_width: f64) -> Option<String> {
     // `thumbnails` is ordered worst → best; prefer the largest with a real URL.
     if let Some(list) = root.get("thumbnails").and_then(Value::as_array) {
         let best = list
             .iter()
             .filter(|t| as_str(t, "url").is_some())
+            .filter(|t| as_f64(t, "width").unwrap_or(0.0) <= max_width)
             .max_by_key(|t| {
                 let w = as_f64(t, "width").unwrap_or(0.0) as i64;
                 let h = as_f64(t, "height").unwrap_or(0.0) as i64;
@@ -797,6 +932,80 @@ pub fn resolve_streams(root: &Value, track_id: &str) -> Result<StreamSet> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn parses_a_flat_playlist_search_entry() {
+        let entry = json!({
+            "id": "dQw4w9WgXcQ",
+            "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "title": "Never Gonna Give You Up",
+            "channel": "Rick Astley",
+            "duration": 213.0,
+            "view_count": 1_600_000_000.0,
+            "thumbnails": [
+                { "url": "https://i.ytimg.com/small.jpg", "width": 168 },
+                { "url": "https://i.ytimg.com/medium.jpg", "width": 360 },
+                { "url": "https://i.ytimg.com/maxres.jpg", "width": 1280 },
+            ],
+        });
+
+        let hit = parse_search_entry(&entry).expect("entry should parse");
+        assert_eq!(hit.id, "dQw4w9WgXcQ");
+        assert_eq!(hit.title, "Never Gonna Give You Up");
+        assert_eq!(hit.channel.as_deref(), Some("Rick Astley"));
+        assert_eq!(hit.duration, Some(213.0));
+        assert!(!hit.live);
+        // Capped: the 1280px still is rejected in favour of the 360px one.
+        assert_eq!(hit.thumbnail.as_deref(), Some("https://i.ytimg.com/medium.jpg"));
+    }
+
+    #[test]
+    fn search_entry_survives_missing_fields() {
+        // Only the id is load-bearing; everything else has a sane absence, so a
+        // sparse entry still reaches the list rather than being dropped.
+        let hit = parse_search_entry(&json!({ "id": "abc123" })).expect("id alone is enough");
+        assert_eq!(hit.title, "Untitled");
+        assert_eq!(hit.channel, None);
+        assert_eq!(hit.duration, None);
+        assert_eq!(hit.thumbnail, None);
+        assert_eq!(hit.url, "https://www.youtube.com/watch?v=abc123");
+
+        assert!(parse_search_entry(&json!({ "title": "no id" })).is_none());
+    }
+
+    #[test]
+    fn live_search_entries_report_no_duration() {
+        let hit = parse_search_entry(&json!({
+            "id": "livestream1",
+            "title": "Live now",
+            "is_live": true,
+            // yt-dlp reports 0 for a stream that has not ended.
+            "duration": 0.0,
+        }))
+        .expect("entry should parse");
+
+        assert!(hit.live);
+        assert_eq!(hit.duration, None, "a zero duration is an absence, not a length");
+    }
+
+    #[test]
+    fn search_falls_back_to_the_single_thumbnail_field() {
+        let hit = parse_search_entry(&json!({
+            "id": "abc123",
+            "thumbnail": "https://i.ytimg.com/only.jpg",
+        }))
+        .expect("entry should parse");
+
+        assert_eq!(hit.thumbnail.as_deref(), Some("https://i.ytimg.com/only.jpg"));
+    }
+
+    #[test]
+    fn search_args_do_not_suppress_the_playlist() {
+        // `ytsearch:` results *are* a playlist, so --no-playlist would collapse
+        // twenty hits down to one. It belongs to base_args and nothing else.
+        assert!(!common_args().iter().any(|a| a == "--no-playlist"));
+        assert!(base_args().iter().any(|a| a == "--no-playlist"));
+    }
 
     #[test]
     fn normalises_every_supported_link_shape() {

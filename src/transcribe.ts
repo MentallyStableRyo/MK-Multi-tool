@@ -158,6 +158,9 @@ const MARKUP = `
     </div>
     <div class="bar" data-el="progressBar"><i></i></div>
     <div class="progress-note" data-el="progressNote"></div>
+    <div class="row" style="margin-top:12px">
+      <button class="danger" data-el="cancelBtn">Cancel</button>
+    </div>
   </section>
 
   <section class="card" data-el="resultCard" hidden>
@@ -311,6 +314,16 @@ export class TranscribeView implements Tool {
 
     this.pick<HTMLInputElement>("translate").addEventListener("change", (event) => {
       this.state.translate = (event.target as HTMLInputElement).checked;
+    });
+
+    this.pick("cancelBtn").addEventListener("click", () => {
+      if (!this.state.jobId) return;
+      // whisper checks the token between segments, so a long file stops within
+      // a segment rather than instantly. Say so instead of leaving a dead button.
+      const button = this.pick<HTMLButtonElement>("cancelBtn");
+      button.disabled = true;
+      button.textContent = "Cancelling…";
+      void api.cancelJob(this.state.jobId);
     });
 
     this.pick("revealBtn").addEventListener("click", () => {
@@ -571,9 +584,14 @@ export class TranscribeView implements Tool {
         this.syncActions();
         break;
 
+      // The job writes its .srt only after whisper finishes and clears its
+      // scratch directory on every exit path, so a cancel really does leave
+      // nothing behind. The card stays up to say that, as the slice tab does.
       case "cancelled":
         this.state.jobId = null;
-        this.pick("progressCard").hidden = true;
+        this.pick("progressBar").className = "bar failed";
+        this.pick("cancelBtn").hidden = true;
+        this.pick("progressNote").textContent = "Cancelled — nothing was written.";
         this.syncActions();
         break;
 
@@ -679,6 +697,15 @@ export class TranscribeView implements Tool {
     this.showError(null);
     this.state.summary = null;
     this.pick("resultCard").hidden = true;
+
+    // A previous cancel leaves the card in its stopped state. Clear it before
+    // setProgress runs, which is what puts the bar back into indeterminate.
+    this.pick("progressBar").className = "bar";
+    const cancelBtn = this.pick<HTMLButtonElement>("cancelBtn");
+    cancelBtn.hidden = false;
+    cancelBtn.disabled = false;
+    cancelBtn.textContent = "Cancel";
+
     this.setProgress(null, "Starting…");
 
     try {

@@ -72,6 +72,7 @@ pub fn run() {
             commands::default_output_dir,
             commands::suggest_filename,
             commands::analyze_url,
+            commands::search_youtube,
             commands::start_slice,
             commands::cancel_job,
             commands::transcription_tiers,

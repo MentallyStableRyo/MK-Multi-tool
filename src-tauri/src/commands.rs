@@ -111,9 +111,16 @@ fn sanitize_stem(title: &str) -> String {
 ///
 /// `platform` is the tab the link was pasted into; it decides which link shapes
 /// are accepted. Absent, it defaults to YouTube.
+///
+/// `job_id` comes from the caller rather than being returned, because the
+/// result arrives with the call: there is no later event to carry an id back,
+/// and the UI needs something to pass to [`cancel_job`] while a slow metadata
+/// fetch is still in flight.
 #[tauri::command]
 pub async fn analyze_url(
     app: AppHandle,
+    registry: State<'_, JobRegistry>,
+    job_id: String,
     url: String,
     platform: Option<Platform>,
     cookies: Option<CookieOptions>,
@@ -122,10 +129,12 @@ pub async fn analyze_url(
     let normalized = platform.normalize(&url)?;
     let toolchain = binaries::resolve(&app)?;
     let cookies = cookies.unwrap_or_default();
-    let cancel = tokio_util::sync::CancellationToken::new();
+    let cancel = registry.register(&job_id);
 
-    let document = youtube::dump_json(&toolchain, &normalized, platform, &cookies, &cancel).await?;
-    let info = youtube::parse_info(&document)?;
+    let document = youtube::dump_json(&toolchain, &normalized, platform, &cookies, &cancel).await;
+    registry.finish(&job_id);
+
+    let info = youtube::parse_info(&document?)?;
 
     if info.tracks.is_empty() {
         return Err(AppError::other(format!(
@@ -135,6 +144,27 @@ pub async fn analyze_url(
     }
 
     Ok(info)
+}
+
+/// Search YouTube by keyword, returning enough to render a result list.
+///
+/// Cancellation works the same way as [`analyze_url`]: the caller supplies the
+/// id up front so a search that is taking too long can be abandoned.
+#[tauri::command]
+pub async fn search_youtube(
+    app: AppHandle,
+    registry: State<'_, JobRegistry>,
+    job_id: String,
+    query: String,
+    cookies: Option<CookieOptions>,
+) -> Result<Vec<youtube::SearchResult>> {
+    let toolchain = binaries::resolve(&app)?;
+    let cookies = cookies.unwrap_or_default();
+    let cancel = registry.register(&job_id);
+
+    let found = youtube::search(&toolchain, &query, &cookies, &cancel).await;
+    registry.finish(&job_id);
+    found
 }
 
 // ---------------------------------------------------------------------------

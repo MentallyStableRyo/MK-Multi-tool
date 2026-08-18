@@ -18,6 +18,7 @@ import type {
   HardwareReport,
   Inspection,
   JobEvent,
+  SearchResult,
   SliceRequest,
   SpeechStatus,
   ToolchainStatus,
@@ -63,9 +64,23 @@ export const api = {
   suggestFilename: (title: string, start: number, end: number, extension: string) =>
     call<string>("suggest_filename", { title, start, end, extension }),
 
-  /** `platform` decides which link shapes the backend will accept. */
-  analyzeUrl: (url: string, platform: PlatformId, cookies: SliceRequest["cookies"]) =>
-    call<VideoInfo>("analyze_url", { url, platform, cookies }),
+  /**
+   * `platform` decides which link shapes the backend will accept.
+   *
+   * `jobId` is supplied by the caller rather than returned, because the result
+   * comes back with the call — there is no later event to carry an id, and the
+   * UI needs one to hand {@link cancelJob} while the fetch is still running.
+   */
+  analyzeUrl: (
+    jobId: string,
+    url: string,
+    platform: PlatformId,
+    cookies: SliceRequest["cookies"],
+  ) => call<VideoInfo>("analyze_url", { jobId, url, platform, cookies }),
+
+  /** Keyword search. Cancellable the same way as {@link analyzeUrl}. */
+  searchYoutube: (jobId: string, query: string, cookies: SliceRequest["cookies"]) =>
+    call<SearchResult[]>("search_youtube", { jobId, query, cookies }),
 
   startSlice: (request: SliceRequest) => call<string>("start_slice", { request }),
 

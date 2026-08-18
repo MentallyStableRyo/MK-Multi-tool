@@ -108,6 +108,9 @@ const MARKUP = `
     </div>
     <div class="bar" data-el="progressBar"><i></i></div>
     <div class="progress-note" data-el="progressNote"></div>
+    <div class="row" style="margin-top:12px">
+      <button class="danger" data-el="cancelBtn">Cancel</button>
+    </div>
   </section>
 
   <section class="card" data-el="resultCard" hidden>
@@ -222,6 +225,8 @@ export class RemoveBackgroundView implements Tool {
   private wire(): void {
     const dropzone = this.pick("dropzone");
     const fileInput = this.pick<HTMLInputElement>("fileInput");
+
+    this.pick("cancelBtn").addEventListener("click", () => this.cancelRun());
 
     dropzone.addEventListener("click", () => fileInput.click());
     dropzone.addEventListener("keydown", (event) => {
@@ -426,6 +431,23 @@ export class RemoveBackgroundView implements Tool {
    * the two — whereas a freshly dropped file should not sit under the last
    * image's result.
    */
+  /**
+   * Abandon the in-flight cut.
+   *
+   * Bumping the generation is the whole mechanism: `run` reads it at every
+   * boundary and discards its own result once it no longer matches. An
+   * inference already inside the WASM call still runs to completion — it
+   * cannot be interrupted from here — but nothing waits on it, so the tab is
+   * usable again immediately.
+   */
+  private cancelRun(): void {
+    if (!this.state.processing) return;
+    this.generation += 1;
+    this.state.processing = false;
+    this.setProgress(null);
+    this.syncActions();
+  }
+
   private async run(options: { keepResult: boolean; decodeFrom?: File }): Promise<void> {
     const run = (this.generation += 1);
 
@@ -461,9 +483,17 @@ export class RemoveBackgroundView implements Tool {
       const bitmap = this.state.bitmap;
       if (!bitmap) return;
 
-      const matte = await cutout(bitmap, this.state.tier, (progress) => {
-        if (run === this.generation) this.setProgress(progress);
-      });
+      const matte = await cutout(
+        bitmap,
+        this.state.tier,
+        (progress) => {
+          if (run === this.generation) this.setProgress(progress);
+        },
+        // Cancelling bumps the generation, which is already how a superseded
+        // run is abandoned — so cancel and "the user changed tier mid-run"
+        // reduce to the same signal rather than two competing ones.
+        () => run !== this.generation,
+      );
       if (run !== this.generation) return;
 
       this.state.matte = matte;

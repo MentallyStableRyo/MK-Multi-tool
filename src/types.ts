@@ -130,6 +130,20 @@ export interface TierStatus {
   installDir: string | null;
 }
 
+/** One hit from a keyword search. Mirrors `youtube::SearchResult`. */
+export interface SearchResult {
+  id: string;
+  /** Canonical watch URL, ready to feed straight back into `analyzeUrl`. */
+  url: string;
+  title: string;
+  channel: string | null;
+  /** Seconds; `null` for a live stream, which has no final duration. */
+  duration: number | null;
+  viewCount: number | null;
+  thumbnail: string | null;
+  live: boolean;
+}
+
 /** Whether the speech engine is present, and the tiers it can run. */
 export interface SpeechStatus {
   engineAvailable: boolean;

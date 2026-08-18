@@ -37,6 +37,42 @@ Everything past link normalisation is site-agnostic: yt-dlp flattens all four
 sites into one metadata shape, so the quality model, the cut planner, and the
 FFmpeg pipeline are shared.
 
+### Search — YouTube only
+
+The YouTube source box takes a search phrase as well as a link. Type something
+that is not a URL and the button becomes **Search**; results appear underneath
+with thumbnail, channel, duration and view count, and picking one drops its URL
+into the box and analyses it as though you had pasted it.
+
+This runs through yt-dlp's own `ytsearch:` scheme rather than scraping a results
+page, with `--flat-playlist` so it reads the result page once instead of
+visiting all twenty videos to build format tables. The full metadata fetch
+happens only for the one you pick.
+
+It is YouTube-only because it is the only one of the four with a first-class
+search scheme in yt-dlp; the other tabs stay link-only, which is a `search: false`
+in `src/platforms.ts` rather than a conditional in the view.
+
+### Cancelling
+
+Every operation that can take longer than an instant is cancellable, and each
+cancel leaves nothing half-written behind:
+
+| Operation                     | Cancel stops it                                        |
+| ----------------------------- | ------------------------------------------------------ |
+| Analyse / Search              | Kills the yt-dlp child; box returns to idle            |
+| Slice render                  | Kills FFmpeg; no output file is written                |
+| Audio → SRT                   | Between whisper segments; scratch WAV is swept         |
+| Convert (single or batch)     | Current item stops; a batch stops at the next item     |
+| Remove Background             | Abandons the run at the next phase boundary            |
+
+The two in-process cases are worth being precise about. Transcription checks
+between whisper's segments, so a long file stops within a segment rather than
+instantly — the button says *Cancelling…* while that plays out. Background
+removal runs its inference as a single WebAssembly call that cannot be
+interrupted once begun, so cancelling abandons the run and frees the tab
+immediately while that one call finishes unobserved in the background.
+
 ---
 
 ## Remove Background

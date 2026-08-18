@@ -118,6 +118,19 @@ const ACCEPTED = new Set(["image/png", "image/jpeg", "image/webp", "image/bmp", 
 const ACCEPTED_EXTENSIONS = /\.(png|jpe?g|webp|bmp|gif)$/i;
 
 /** A failure the UI can show verbatim, with a next step where one exists. */
+/**
+ * Thrown by {@link cutout} when the caller's `shouldStop` asks it to end.
+ *
+ * A distinct type rather than a `MatteError` because it is not a failure: the
+ * tab discards it silently instead of showing the user an error they caused.
+ */
+export class MatteCancelled extends Error {
+  constructor() {
+    super("Cancelled");
+    this.name = "MatteCancelled";
+  }
+}
+
 export class MatteError extends Error {
   readonly hint: string | null;
 
@@ -527,8 +540,22 @@ export async function cutout(
   bitmap: ImageBitmap,
   tier: Tier,
   onProgress: (progress: Progress) => void = () => {},
+  shouldStop: () => boolean = () => false,
 ): Promise<Matte> {
+  /**
+   * Bail at a phase boundary if the caller has lost interest.
+   *
+   * Only boundaries: `session.run` below is a single WASM call that holds the
+   * thread until it returns, and nothing short of moving inference into a
+   * worker can interrupt it. Checking either side of it is what keeps a cancel
+   * during model loading from paying for an inference nobody will look at.
+   */
+  const stopIfAsked = (): void => {
+    if (shouldStop()) throw new MatteCancelled();
+  };
+
   const { ort, session, spec } = await sessionFor(tier, onProgress);
+  stopIfAsked();
 
   onProgress({ phase: "decoding", message: "Preparing the image…", percent: 15 });
 
@@ -540,6 +567,7 @@ export async function cutout(
   // Yield once so the progress bar actually paints before the WASM call takes
   // the main thread for a second or two.
   await new Promise((resolve) => requestAnimationFrame(resolve));
+  stopIfAsked();
 
   const started = performance.now();
   let outputs: InferenceSession.OnnxValueMapType;
@@ -552,6 +580,7 @@ export async function cutout(
     );
   }
   const inferenceMs = performance.now() - started;
+  stopIfAsked();
 
   // U²-Net exposes seven side outputs; the first is the fused, full-resolution
   // one and the rest are coarser supervision maps used only during training.
