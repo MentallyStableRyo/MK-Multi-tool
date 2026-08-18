@@ -15,7 +15,7 @@
 import { PLATFORMS, type PlatformId } from "./platforms";
 import type { JobEvent } from "./types";
 
-export type ToolId = PlatformId | "removebg" | "transcribe";
+export type ToolId = PlatformId | "removebg" | "transcribe" | "convert";
 
 /** What the shared action bar should show for the active tool. */
 export interface Actions {
@@ -104,6 +104,16 @@ const TRANSCRIBE_ICON =
   '<path d="M2.6 14h10.8" fill="none" stroke="currentColor" stroke-width="1.4" ' +
   'stroke-linecap="round" stroke-dasharray="3.2 1.6"/>';
 
+/** Two shapes — a document corner and a circle — joined by an arrow: one
+ * media becoming another. */
+const CONVERT_ICON =
+  '<path d="M3.2 2.4h4.6l2.4 2.4v6.8H3.2z" fill="none" stroke="currentColor" ' +
+  'stroke-width="1.3" stroke-linejoin="round"/>' +
+  '<path d="M7.8 2.4v2.4h2.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>' +
+  '<circle cx="11.6" cy="11.6" r="2.6" fill="none" stroke="currentColor" stroke-width="1.3"/>' +
+  '<path d="M6.6 8.6l2.6 2.6-2.6 2.6" fill="none" stroke="currentColor" ' +
+  'stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>';
+
 export const TOOL_TABS: readonly TabSpec[] = [
   ...PLATFORMS.map((platform) => ({
     id: platform.id,
@@ -120,5 +130,10 @@ export const TOOL_TABS: readonly TabSpec[] = [
     id: "transcribe",
     label: "Audio → SRT",
     icon: TRANSCRIBE_ICON,
+  },
+  {
+    id: "convert",
+    label: "Convert",
+    icon: CONVERT_ICON,
   },
 ];

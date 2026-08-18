@@ -1,6 +1,6 @@
 [package]
 name = "mk-multitool"
-version = "0.5.0"
+version = "0.6.0"
 description = "Precision video slice downloader for YouTube, Instagram, TikTok, and X"
 authors = ["MK"]
 edition = "2021"
@@ -44,6 +44,19 @@ url = "2"
 which = "7"
 dirs = "5"
 sysinfo = { version = "0.33", default-features = false, features = ["disk"] }
+
+# General Converter
+image = { version = "0.25", default-features = false, features = [
+    "png", "jpeg", "webp", "bmp", "tiff", "gif", "ico",
+] }
+resvg = { version = "0.48", default-features = false }
+usvg = { version = "0.48", default-features = false, features = ["text", "system-fonts"] }
+tiny-skia = "0.12"
+# `bind_to_library` dynamically loads the vendored pdfium at runtime (no
+# `static` feature), matching the sidecar-resolution pattern used everywhere
+# else in this app. `image_api` gets DynamicImage in and out of PDF pages, so
+# PDF<->image conversion and image-to-PDF assembly both go through one crate.
+pdfium-render = { version = "0.9", features = ["image_latest"] }
 
 [features]
 # Enabled by `tauri dev` / `tauri build` to inject the dev server URL.

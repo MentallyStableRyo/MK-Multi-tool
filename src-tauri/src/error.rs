@@ -266,10 +266,29 @@ impl AppError {
     pub fn hint(&self) -> Option<String> {
         match self {
             Self::Youtube { kind, .. } => kind.hint().map(str::to_string),
-            Self::MissingBinary { name } => Some(format!(
-                "`{name}` is missing. Run `npm run binaries` to vendor it into src-tauri/binaries, \
-                 or install it so it's on your PATH."
-            )),
+            Self::MissingBinary { name } => {
+                // Each sidecar has its own vendoring script; naming the wrong
+                // one would send the user to run something that does nothing
+                // for the tool that's actually missing.
+                let vendor_command = match name.as_str() {
+                    "pandoc" => "npm run pandoc",
+                    "pdfium" => "npm run pdfium",
+                    "wkhtmltopdf" => "",
+                    "whisper-cli" => "npm run whisper",
+                    _ => "npm run binaries",
+                };
+                Some(if vendor_command.is_empty() {
+                    format!(
+                        "`{name}` is missing and is not vendored by this app — install it yourself \
+                         and make sure it's on your PATH."
+                    )
+                } else {
+                    format!(
+                        "`{name}` is missing. Run `{vendor_command}` to vendor it into src-tauri/binaries, \
+                         or install it so it's on your PATH."
+                    )
+                })
+            }
             Self::InvalidUrl { accepted, .. } => Some(format!("Supported: {accepted}")),
             Self::DiskSpace { .. } => {
                 Some("Free up space or choose an output folder on another drive.".to_string())
@@ -411,5 +430,21 @@ mod tests {
         };
         assert_eq!(e.kind(), "geo_blocked");
         assert!(e.hint().is_some());
+    }
+
+    #[test]
+    fn missing_binary_hints_name_the_right_vendoring_command() {
+        let hint_for = |name: &str| AppError::MissingBinary { name: name.to_string() }.hint().unwrap();
+
+        assert!(hint_for("pandoc").contains("npm run pandoc"));
+        assert!(hint_for("pdfium").contains("npm run pdfium"));
+        assert!(hint_for("whisper-cli").contains("npm run whisper"));
+        assert!(hint_for("ffmpeg").contains("npm run binaries"));
+
+        // wkhtmltopdf is deliberately never vendored (see convert::document::to_pdf),
+        // so its hint must not send anyone to a command that vendors nothing.
+        let wk = hint_for("wkhtmltopdf");
+        assert!(!wk.contains("npm run"));
+        assert!(wk.contains("PATH"));
     }
 }

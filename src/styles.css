@@ -1222,6 +1222,80 @@ input[type="range"] {
   font-weight: 700;
 }
 
+/* ----------------------------------------------------- general converter */
+
+.tier-grid.cols-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.queue-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 12.5px;
+}
+
+.queue-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.queue-meta {
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.queue-status {
+  font-size: 11px;
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.queue-converting .queue-status {
+  color: var(--accent-hot);
+}
+
+.queue-done .queue-status {
+  color: var(--ok);
+}
+
+.queue-failed .queue-status,
+.queue-failed .queue-name {
+  color: var(--err);
+}
+
+.queue-skipped .queue-status {
+  color: var(--text-faint);
+}
+
+.queue-remove {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  line-height: 1;
+  font-size: 15px;
+  border-radius: 999px;
+}
+
 /* Thin, unobtrusive scrollbar. */
 main::-webkit-scrollbar {
   width: 10px;

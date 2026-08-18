@@ -280,8 +280,7 @@ where
         let detail = out
             .stderr
             .lines()
-            .filter(|l| !l.starts_with("load_backend") && !l.starts_with("read_audio_data"))
-            .next_back()
+            .rfind(|l| !l.starts_with("load_backend") && !l.starts_with("read_audio_data"))
             .unwrap_or("whisper-cli exited without explanation");
         return Err(AppError::other(format!("Transcription failed: {detail}")));
     }

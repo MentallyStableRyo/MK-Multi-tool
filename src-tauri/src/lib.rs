@@ -28,6 +28,7 @@
 
 mod binaries;
 mod commands;
+mod convert;
 mod disk;
 mod error;
 mod ffargs;
@@ -77,6 +78,10 @@ pub fn run() {
             commands::start_transcription,
             commands::write_file,
             commands::reveal_in_folder,
+            commands::convert_hardware_report,
+            commands::convert_inspect,
+            commands::convert_target_extension,
+            commands::start_conversion,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build MK Multi-tool")

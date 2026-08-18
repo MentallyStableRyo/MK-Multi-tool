@@ -1,0 +1,260 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MSI installer for MK Multi-tool.
+
+  Tauri's own MSI target cannot build this payload: it puts everything in a
+  single cabinet, and Windows Installer caps a CAB at 2 GB, so `light.exe`
+  fails with `LGHT0306 - An error (E_FAIL) was returned while finalizing a CAB
+  file`. The limit is per cabinet rather than per package, so this source splits
+  the ~2.9 GB across four Media elements. The largest, holding the 1.5 GB speech
+  model, stays comfortably inside the limit — as does Media 2, which also
+  carries Pandoc (the General Converter's ~230 MB document engine) alongside
+  the other sidecars.
+
+  Build with installer\build-msi.cmd, after building the binary alone via
+  tauri's no-bundle flag. (Spelled out in build-msi.cmd, which unlike an XML
+  comment can contain a double hyphen.)
+
+  The install layout mirrors what Tauri's bundler produces, so `binaries.rs`
+  resolves sidecars and models identically however the app was installed.
+
+  UpgradeCode is deliberately the same GUID Tauri derived from the product name,
+  so this package upgrades an install left by the earlier Tauri-built MSIs
+  rather than sitting alongside it.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <?ifndef Version?>
+  <?define Version = "0.6.0" ?>
+  <?endif?>
+
+  <?define ProductName = "MK Multi-tool" ?>
+  <?define Manufacturer = "MK" ?>
+  <?define UpgradeCode = "{87A59295-F562-57F1-8BE3-5C6AF0227375}" ?>
+
+  <Product Id="*"
+           Name="$(var.ProductName)"
+           Language="1033"
+           Version="$(var.Version)"
+           Manufacturer="$(var.Manufacturer)"
+           UpgradeCode="$(var.UpgradeCode)">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Description="$(var.ProductName) $(var.Version)"
+             Manufacturer="$(var.Manufacturer)" />
+
+    <!-- Replace any previously installed version, including the Tauri-built
+         MSIs, rather than installing beside them. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of $(var.ProductName) is already installed." />
+
+    <!-- One cabinet per Media. Splitting is the entire point: a single cabinet
+         holding all of this exceeds the 2 GB format limit and fails to
+         finalize. Files are assigned to a Media by their DiskId below. -->
+    <Media Id="1" Cabinet="app.cab"    EmbedCab="yes" CompressionLevel="high" />
+    <Media Id="2" Cabinet="tools.cab"  EmbedCab="yes" CompressionLevel="high" />
+    <Media Id="3" Cabinet="small.cab"  EmbedCab="yes" CompressionLevel="high" />
+    <Media Id="4" Cabinet="large.cab"  EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="AppIcon.exe" SourceFile="$(var.SourceDir)\icons\icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.exe" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <!-- WebView2 is present on current Windows installs; without it the window
+         renders blank. Warn rather than silently installing something broken. -->
+    <Property Id="WEBVIEW2VERSION">
+      <RegistrySearch Id="WebView2Search"
+                      Root="HKLM"
+                      Key="SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+                      Name="pv"
+                      Type="raw" />
+    </Property>
+    <Condition Message="This app requires the Microsoft WebView2 runtime. Install it from https://developer.microsoft.com/microsoft-edge/webview2/ and run this installer again.">
+      <![CDATA[Installed OR WEBVIEW2VERSION]]>
+    </Condition>
+
+    <Condition Message="$(var.ProductName) requires 64-bit Windows.">
+      <![CDATA[VersionNT64]]>
+    </Condition>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="$(var.ProductName)">
+          <Directory Id="BinariesFolder" Name="binaries">
+            <Directory Id="WhisperFolder" Name="whisper">
+              <Directory Id="ModelsFolder" Name="models" />
+            </Directory>
+          </Directory>
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="AppMenuFolder" Name="$(var.ProductName)" />
+      </Directory>
+    </Directory>
+
+    <!-- ============================ Media 1: the app ==================== -->
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="MainExecutable" Guid="*">
+        <File Id="MainExe"
+              Source="$(var.BuildDir)\mk-multitool.exe"
+              Name="mk-multitool.exe"
+              KeyPath="yes"
+              DiskId="1">
+          <Shortcut Id="StartMenuShortcut"
+                    Directory="AppMenuFolder"
+                    Name="$(var.ProductName)"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="AppIcon.exe"
+                    Advertise="yes" />
+        </File>
+      </Component>
+
+      <!-- ========================= Media 2: sidecars =================== -->
+      <!-- Tauri's externalBin strips the target triple when it lays these
+           down; the Name attributes reproduce that, because binaries.rs looks
+           for the bare names. -->
+      <Component Id="FfmpegExe" Guid="*">
+        <File Id="Ffmpeg" Source="$(var.SourceDir)\binaries\ffmpeg-x86_64-pc-windows-msvc.exe"
+              Name="ffmpeg.exe" KeyPath="yes" DiskId="2" />
+      </Component>
+      <Component Id="FfprobeExe" Guid="*">
+        <File Id="Ffprobe" Source="$(var.SourceDir)\binaries\ffprobe-x86_64-pc-windows-msvc.exe"
+              Name="ffprobe.exe" KeyPath="yes" DiskId="2" />
+      </Component>
+      <Component Id="YtDlpExe" Guid="*">
+        <File Id="YtDlp" Source="$(var.SourceDir)\binaries\yt-dlp-x86_64-pc-windows-msvc.exe"
+              Name="yt-dlp.exe" KeyPath="yes" DiskId="2" />
+      </Component>
+
+      <!-- Pandoc: General Converter documents (TXT/Markdown/HTML/DOCX/ODT/RTF/
+           EPUB). Single self-contained executable, same externalBin naming
+           convention as the three above — installs beside mk-multitool.exe. -->
+      <Component Id="PandocExe" Guid="*">
+        <File Id="Pandoc" Source="$(var.SourceDir)\binaries\pandoc-x86_64-pc-windows-msvc.exe"
+              Name="pandoc.exe" KeyPath="yes" DiskId="2" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- PDFium: General Converter PDF ↔ image. A library, not a program —
+         dlopen'd by pdfium-render rather than spawned, so unlike the sidecars
+         above it is a bundle *resource*: it keeps its own filename and lands
+         in binaries\, not beside the executable. -->
+    <DirectoryRef Id="BinariesFolder">
+      <Component Id="PdfiumDll" Guid="*">
+        <File Id="Pdfium" Source="$(var.SourceDir)\binaries\pdfium.dll"
+              Name="pdfium.dll" KeyPath="yes" DiskId="2" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- The Start Menu folder needs its own component so uninstall removes it.
+         It lives here rather than beside the executable because a component's
+         directory comes from the element it nests under. -->
+    <DirectoryRef Id="AppMenuFolder">
+      <Component Id="AppMenuFolderEntry" Guid="*">
+        <RemoveFolder Id="RemoveAppMenuFolder" On="uninstall" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\$(var.Manufacturer)\$(var.ProductName)"
+                       Name="installed"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- whisper.cpp travels as a directory: whisper-cli dlopens whisper.dll and
+         selects a ggml-cpu backend at runtime from the host's instruction set,
+         so every sibling has to be present. -->
+    <DirectoryRef Id="WhisperFolder">
+      <Component Id="WhisperCli" Guid="*">
+        <File Id="WhisperCliExe" Source="$(var.SourceDir)\binaries\whisper\whisper-cli.exe" KeyPath="yes" DiskId="2" />
+      </Component>
+      <Component Id="WhisperDll" Guid="*">
+        <File Id="WhisperLib" Source="$(var.SourceDir)\binaries\whisper\whisper.dll" KeyPath="yes" DiskId="2" />
+      </Component>
+      <Component Id="GgmlDll" Guid="*">
+        <File Id="GgmlLib" Source="$(var.SourceDir)\binaries\whisper\ggml.dll" KeyPath="yes" DiskId="2" />
+      </Component>
+      <Component Id="GgmlBaseDll" Guid="*">
+        <File Id="GgmlBaseLib" Source="$(var.SourceDir)\binaries\whisper\ggml-base.dll" KeyPath="yes" DiskId="2" />
+      </Component>
+      <Component Id="GgmlCpuAlderlake" Guid="*">
+        <File Id="CpuAlderlake" Source="$(var.SourceDir)\binaries\whisper\ggml-cpu-alderlake.dll" KeyPath="yes" DiskId="2" />
+      </Component>
+      <Component Id="GgmlCpuCannonlake" Guid="*">
+        <File Id="CpuCannonlake" Source="$(var.SourceDir)\binaries\whisper\ggml-cpu-cannonlake.dll" KeyPath="yes" DiskId="2" />
+      </Component>
+      <Component Id="GgmlCpuCascadelake" Guid="*">
+        <File Id="CpuCascadelake" Source="$(var.SourceDir)\binaries\whisper\ggml-cpu-cascadelake.dll" KeyPath="yes" DiskId="2" />
+      </Component>
+      <Component Id="GgmlCpuHaswell" Guid="*">
+        <File Id="CpuHaswell" Source="$(var.SourceDir)\binaries\whisper\ggml-cpu-haswell.dll" KeyPath="yes" DiskId="2" />
+      </Component>
+      <Component Id="GgmlCpuIcelake" Guid="*">
+        <File Id="CpuIcelake" Source="$(var.SourceDir)\binaries\whisper\ggml-cpu-icelake.dll" KeyPath="yes" DiskId="2" />
+      </Component>
+      <Component Id="GgmlCpuSandybridge" Guid="*">
+        <File Id="CpuSandybridge" Source="$(var.SourceDir)\binaries\whisper\ggml-cpu-sandybridge.dll" KeyPath="yes" DiskId="2" />
+      </Component>
+      <Component Id="GgmlCpuSkylakex" Guid="*">
+        <File Id="CpuSkylakex" Source="$(var.SourceDir)\binaries\whisper\ggml-cpu-skylakex.dll" KeyPath="yes" DiskId="2" />
+      </Component>
+      <Component Id="GgmlCpuSse42" Guid="*">
+        <File Id="CpuSse42" Source="$(var.SourceDir)\binaries\whisper\ggml-cpu-sse42.dll" KeyPath="yes" DiskId="2" />
+      </Component>
+      <Component Id="GgmlCpuX64" Guid="*">
+        <File Id="CpuX64" Source="$(var.SourceDir)\binaries\whisper\ggml-cpu-x64.dll" KeyPath="yes" DiskId="2" />
+      </Component>
+      <Component Id="WhisperManifest" Guid="*">
+        <File Id="WhisperManifestJson" Source="$(var.SourceDir)\binaries\whisper\manifest.json" KeyPath="yes" DiskId="2" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- ================= Media 3 and 4: the speech models ================= -->
+    <!-- large-v3-turbo gets a cabinet to itself. At 1.5 GB it is most of the
+         payload, and pairing it with anything else risks the 2 GB limit that
+         made Tauri's single-cabinet MSI fail in the first place. -->
+    <DirectoryRef Id="ModelsFolder">
+      <Component Id="ModelBase" Guid="*">
+        <File Id="GgmlBaseBin" Source="$(var.SourceDir)\binaries\whisper\models\ggml-base.bin" KeyPath="yes" DiskId="3" />
+      </Component>
+      <Component Id="ModelSmall" Guid="*">
+        <File Id="GgmlSmallBin" Source="$(var.SourceDir)\binaries\whisper\models\ggml-small.bin" KeyPath="yes" DiskId="3" />
+      </Component>
+      <Component Id="ModelLarge" Guid="*">
+        <File Id="GgmlLargeBin" Source="$(var.SourceDir)\binaries\whisper\models\ggml-large-v3-turbo.bin" KeyPath="yes" DiskId="4" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="Complete" Title="$(var.ProductName)" Level="1" Display="expand"
+             ConfigurableDirectory="INSTALLFOLDER">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="AppMenuFolderEntry" />
+      <ComponentRef Id="FfmpegExe" />
+      <ComponentRef Id="FfprobeExe" />
+      <ComponentRef Id="YtDlpExe" />
+      <ComponentRef Id="PandocExe" />
+      <ComponentRef Id="PdfiumDll" />
+      <ComponentRef Id="WhisperCli" />
+      <ComponentRef Id="WhisperDll" />
+      <ComponentRef Id="GgmlDll" />
+      <ComponentRef Id="GgmlBaseDll" />
+      <ComponentRef Id="GgmlCpuAlderlake" />
+      <ComponentRef Id="GgmlCpuCannonlake" />
+      <ComponentRef Id="GgmlCpuCascadelake" />
+      <ComponentRef Id="GgmlCpuHaswell" />
+      <ComponentRef Id="GgmlCpuIcelake" />
+      <ComponentRef Id="GgmlCpuSandybridge" />
+      <ComponentRef Id="GgmlCpuSkylakex" />
+      <ComponentRef Id="GgmlCpuSse42" />
+      <ComponentRef Id="GgmlCpuX64" />
+      <ComponentRef Id="WhisperManifest" />
+      <ComponentRef Id="ModelBase" />
+      <ComponentRef Id="ModelSmall" />
+      <ComponentRef Id="ModelLarge" />
+    </Feature>
+
+    <UIRef Id="WixUI_InstallDir" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+  </Product>
+</Wix>

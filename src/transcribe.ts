@@ -36,6 +36,9 @@ interface State {
   jobId: string | null;
   summary: TranscriptSummary | null;
   tiers: TierStatus[];
+  /** Starts optimistic so the tab does not flash a warning while tiers load. */
+  engineAvailable: boolean;
+  engineNote: string | null;
 }
 
 const DEFAULT_WORDS = 7;
@@ -195,6 +198,8 @@ export class TranscribeView implements Tool {
       jobId: null,
       summary: null,
       tiers: [],
+      engineAvailable: true,
+      engineNote: null,
     };
 
     root.classList.add("panel");
@@ -371,7 +376,10 @@ export class TranscribeView implements Tool {
     if (this.tiersLoaded) return;
 
     try {
-      this.state.tiers = await api.transcriptionTiers();
+      const status = await api.transcriptionTiers();
+      this.state.tiers = status.tiers;
+      this.state.engineAvailable = status.engineAvailable;
+      this.state.engineNote = status.engineNote;
     } catch (error) {
       this.showError(toErrorPayload(error));
       return;
@@ -393,6 +401,12 @@ export class TranscribeView implements Tool {
   private syncTiers(): void {
     const grid = this.pick("tierGrid");
 
+    // A missing engine disables every tier for a reason that has nothing to do
+    // with the model files, so it takes over the messaging wherever it applies.
+    const engineNote = this.state.engineAvailable
+      ? null
+      : (this.state.engineNote ?? "Speech transcription is unavailable on this system.");
+
     grid.replaceChildren(
       ...this.state.tiers.map((tier) => {
         const card = document.createElement("button");
@@ -406,9 +420,11 @@ export class TranscribeView implements Tool {
         if (!tier.available) {
           card.setAttribute("data-unavailable", "");
           card.disabled = true;
-          card.title = tier.installDir
-            ? `${tier.model} is not installed. Put it in ${tier.installDir} and reopen this tab.`
-            : `${tier.model} is not installed.`;
+          card.title =
+            engineNote ??
+            (tier.installDir
+              ? `${tier.model} is not installed. Put it in ${tier.installDir} and reopen this tab.`
+              : `${tier.model} is not installed.`);
         }
 
         const name = document.createElement("span");
@@ -419,7 +435,9 @@ export class TranscribeView implements Tool {
         detail.className = "tier-detail";
         detail.textContent = tier.available
           ? `${tier.model.replace(/^ggml-|\.bin$/g, "")} · ${this.speedLabel(tier)}`
-          : "not installed";
+          : engineNote
+            ? "no engine"
+            : "not installed";
 
         card.append(name, detail);
         return card;
@@ -429,6 +447,11 @@ export class TranscribeView implements Tool {
     const missing = this.state.tiers.filter((t) => !t.available);
     const note = this.pick("tierNote");
     note.replaceChildren();
+
+    if (engineNote) {
+      note.textContent = engineNote;
+      return;
+    }
 
     if (!missing.length) {
       note.textContent =

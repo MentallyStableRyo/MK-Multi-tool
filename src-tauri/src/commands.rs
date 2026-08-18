@@ -14,6 +14,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::binaries::{self, Toolchain, ToolchainStatus};
+use crate::convert;
 use crate::disk;
 use crate::error::{AppError, Result};
 use crate::jobs::{self, JobEvent, JobRegistry, Stage};
@@ -379,12 +380,12 @@ pub fn cancel_job(registry: State<'_, JobRegistry>, job_id: String) -> bool {
 /// The models are large enough that a user may reasonably install only some of
 /// them, so the UI asks rather than assuming, and offers only what will work.
 #[tauri::command]
-pub fn transcription_tiers(app: AppHandle) -> Vec<TierStatus> {
+pub fn transcription_tiers(app: AppHandle) -> SpeechStatus {
     let installed = binaries::installed_models(&app);
     let have_binary = binaries::locate_whisper(&app).is_some();
     let dropbox = binaries::model_dropbox(&app).map(|p| p.to_string_lossy().into_owned());
 
-    [Accuracy::Fast, Accuracy::Normal, Accuracy::Accurate]
+    let tiers = [Accuracy::Fast, Accuracy::Normal, Accuracy::Accurate]
         .into_iter()
         .map(|accuracy| {
             let file = format!("{}.bin", accuracy.model_stem());
@@ -397,7 +398,47 @@ pub fn transcription_tiers(app: AppHandle) -> Vec<TierStatus> {
                 install_dir: dropbox.clone(),
             }
         })
-        .collect()
+        .collect();
+
+    SpeechStatus {
+        engine_available: have_binary,
+        engine_note: (!have_binary).then(engine_note),
+        tiers,
+    }
+}
+
+/// Whether speech transcription can run at all, and the tiers if it can.
+///
+/// The engine is a separate question from the models. macOS bundles no
+/// whisper.cpp — upstream publishes no macOS command-line build, only an
+/// xcframework meant for linking — so a Mac install can have every model
+/// present and still be unable to transcribe. Reporting the two separately
+/// keeps the UI from blaming a missing model for a missing engine.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeechStatus {
+    pub engine_available: bool,
+    /// What to do about a missing engine. `None` while one is present.
+    pub engine_note: Option<String>,
+    pub tiers: Vec<TierStatus>,
+}
+
+/// Why transcription is unavailable, and the shortest route to fixing it.
+///
+/// Homebrew is a real fix rather than a consolation: `locate_whisper` falls
+/// back to `PATH`, so a brewed `whisper-cli` is picked up on the next open.
+fn engine_note() -> String {
+    if cfg!(target_os = "macos") {
+        "Speech transcription is not bundled in the macOS build — whisper.cpp \
+         publishes no macOS command-line build. Install it with `brew install \
+         whisper-cpp`, then reopen this tab."
+            .to_string()
+    } else {
+        format!(
+            "The speech engine ({}) is missing from this installation.",
+            binaries::WHISPER
+        )
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -502,6 +543,116 @@ pub async fn start_transcription(
                     &task_app,
                     JobEvent::new(&task_id, Stage::Cancelled, "Cancelled"),
                 );
+            }
+            Err(error) => jobs::emit(&task_app, JobEvent::failure(&task_id, &error)),
+        }
+
+        task_app.state::<JobRegistry>().finish(&task_id);
+    });
+
+    Ok(job_id)
+}
+
+// ---------------------------------------------------------------------------
+// General Converter
+// ---------------------------------------------------------------------------
+
+/// Smart hardware-acceleration + tool-availability report shown before a
+/// conversion starts. A missing FFmpeg degrades the video-encoder field
+/// rather than failing the whole check — Documents and PDF may still work.
+#[tauri::command]
+pub async fn convert_hardware_report(app: AppHandle) -> convert::HardwareReport {
+    let toolchain = binaries::resolve_media(&app).ok();
+    convert::detect_hardware(&app, toolchain.as_ref()).await
+}
+
+/// Classify a dropped/picked file so the UI can offer the right target
+/// formats, and — for a PDF — how many pages it has.
+#[tauri::command]
+pub async fn convert_inspect(app: AppHandle, path: String) -> convert::Inspection {
+    convert::inspect(&app, std::path::Path::new(&path)).await
+}
+
+/// The file extension a given target produces, for the save dialog's filter
+/// and the suggested output name — one source of truth instead of a second
+/// copy of the format tables living in TypeScript.
+#[tauri::command]
+pub fn convert_target_extension(options: convert::ConvertOptions) -> String {
+    convert::target_extension(&options).to_string()
+}
+
+/// Start a conversion job. Returns its id immediately; progress arrives on the
+/// same channel as slice renders and transcriptions.
+#[tauri::command]
+pub async fn start_conversion(
+    app: AppHandle,
+    registry: State<'_, JobRegistry>,
+    request: convert::ConvertRequest,
+) -> Result<String> {
+    if request.input_paths.is_empty() {
+        return Err(AppError::other("No input file was given."));
+    }
+    for input in &request.input_paths {
+        if !PathBuf::from(input).is_file() {
+            return Err(AppError::other(format!("That file no longer exists: {input}")));
+        }
+    }
+
+    let output_path = PathBuf::from(&request.output_path);
+    let parent = output_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| AppError::other("Output path has no folder component"))?;
+    if !parent.is_dir() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Only the Audio and Video kinds touch FFmpeg; every other kind must not
+    // be blocked by it being absent.
+    let needs_ffmpeg = matches!(
+        request.options,
+        convert::ConvertOptions::Audio(_) | convert::ConvertOptions::Video(_)
+    );
+    let toolchain = if needs_ffmpeg {
+        binaries::resolve_media(&app)?
+    } else {
+        Toolchain::unused()
+    };
+
+    let job_id = uuid::Uuid::new_v4().to_string();
+    let cancel = registry.register(&job_id);
+
+    let task_app = app.clone();
+    let task_id = job_id.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let mut last_emit = Instant::now() - PROGRESS_INTERVAL;
+        let progress_app = task_app.clone();
+        let progress_id = task_id.clone();
+
+        let result = convert::run(&task_app, &toolchain, request, &cancel, move |fraction, message| {
+            if last_emit.elapsed() < PROGRESS_INTERVAL && fraction < 1.0 {
+                return;
+            }
+            last_emit = Instant::now();
+            jobs::emit(
+                &progress_app,
+                JobEvent::new(&progress_id, Stage::Rendering, message).percent(fraction * 100.0),
+            );
+        })
+        .await;
+
+        match result {
+            Ok(summary) => {
+                jobs::emit(
+                    &task_app,
+                    JobEvent::new(&task_id, Stage::Done, summary.note.clone())
+                        .percent(100.0)
+                        .output(summary.output_paths.first().cloned().unwrap_or_default()),
+                );
+                // The full output list (PDF → images writes one file per page)
+                // rides its own event, the same way a finished transcript does.
+                let _ = task_app.emit("mk://convert-ready", &summary);
             }
             Err(error) => jobs::emit(&task_app, JobEvent::failure(&task_id, &error)),
         }

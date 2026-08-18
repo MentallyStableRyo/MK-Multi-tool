@@ -133,7 +133,11 @@ pub enum Precision {
 static ENCODERS: OnceCell<Vec<String>> = OnceCell::const_new();
 
 /// Everything `ffmpeg -encoders` reports, cached for the process lifetime.
-async fn available_encoders(tc: &Toolchain) -> &'static Vec<String> {
+///
+/// `pub(crate)`: [`crate::convert::media`] probes the same list to build its own
+/// codec-family preference tables (H.265, VP9, …) for the General Converter,
+/// rather than re-running `ffmpeg -encoders` a second time.
+pub(crate) async fn available_encoders(tc: &Toolchain) -> &'static Vec<String> {
     ENCODERS
         .get_or_init(|| async {
             let mut cmd = proc::command(&tc.ffmpeg);
@@ -171,7 +175,12 @@ fn h264_preference() -> &'static [&'static str] {
 }
 
 /// Ordered list of H.264 encoders this FFmpeg build can actually run.
-async fn h264_candidates(tc: &Toolchain) -> Vec<String> {
+///
+/// `pub(crate)`: reused by [`crate::convert::media`] for encoder *discovery*.
+/// It brings its own quality tables rather than reusing [`h264_options`], which
+/// is tuned specifically for the slice pipeline's "visually transparent at
+/// interactive speed" target.
+pub(crate) async fn h264_candidates(tc: &Toolchain) -> Vec<String> {
     let available = available_encoders(tc).await;
     let mut list: Vec<String> = h264_preference()
         .iter()
@@ -198,7 +207,7 @@ fn h264_options(encoder: &str) -> Vec<&'static str> {
     }
 }
 
-fn is_hardware(encoder: &str) -> bool {
+pub(crate) fn is_hardware(encoder: &str) -> bool {
     encoder != "libx264"
 }
 
@@ -460,7 +469,7 @@ pub struct RenderTick {
 ///
 /// Returns `true` if the line advanced the output position, so callers only
 /// emit an event when something actually moved.
-fn apply_progress_line(line: &str, tick: &mut RenderTick) -> bool {
+pub(crate) fn apply_progress_line(line: &str, tick: &mut RenderTick) -> bool {
     let Some((key, value)) = line.split_once('=') else {
         return false;
     };
@@ -759,7 +768,7 @@ async fn verify_output(tc: &Toolchain, output: &Path, cancel: &CancellationToken
 }
 
 /// Last few stderr lines, which is where FFmpeg puts the actual cause.
-fn tail_of(stderr: &str) -> String {
+pub(crate) fn tail_of(stderr: &str) -> String {
     let lines: Vec<&str> = stderr.lines().filter(|l| !l.trim().is_empty()).collect();
     let start = lines.len().saturating_sub(4);
     let detail = lines[start..].join(" / ");

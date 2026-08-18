@@ -1,26 +1,28 @@
 ; Windows installer for MK Multi-tool.
 ;
 ; Inno Setup rather than NSIS or MSI, for one reason: size. With all three
-; speech models bundled the payload is about 2.6 GB, and both of Tauri's
-; Windows targets cap below 2 GB — MSI at the 2 GB CAB format limit
-; (`LGHT0306`, CAB finalization), NSIS at makensis's 32-bit file mapping
-; (`error mmapping file ... is out of range`). Both were built and both failed.
+; speech models bundled the payload is about 2.9 GB (2.6 GB before the General
+; Converter's Pandoc and PDFium were added), and both of Tauri's Windows
+; targets cap below 2 GB — MSI at the 2 GB CAB format limit (`LGHT0306`, CAB
+; finalization), NSIS at makensis's 32-bit file mapping (`error mmapping
+; file ... is out of range`). Both were built and both failed.
 ;
 ; Build with:
 ;   npx tauri build --no-bundle
 ;   iscc installer\mk-multitool.iss                 (version from below)
-;   iscc /DAppVersion=0.6.0 installer\mk-multitool.iss
+;   iscc /DAppVersion=0.7.0 installer\mk-multitool.iss
 ;
 ; The install layout mirrors exactly what Tauri's own NSIS script produces, so
 ; `binaries.rs` resolves the sidecars and models identically either way:
 ;
 ;   <install>\mk-multitool.exe
-;   <install>\ffmpeg.exe  ffprobe.exe  yt-dlp.exe        (externalBin, suffix stripped)
+;   <install>\ffmpeg.exe  ffprobe.exe  yt-dlp.exe  pandoc.exe   (externalBin, suffix stripped)
+;   <install>\binaries\pdfium.dll                               (bundle resource — a library, not spawned)
 ;   <install>\binaries\whisper\*.dll  whisper-cli.exe  manifest.json
 ;   <install>\binaries\whisper\models\*.bin
 
 #ifndef AppVersion
-  #define AppVersion "0.5.0"
+  #define AppVersion "0.6.0"
 #endif
 
 #define AppName        "MK Multi-tool"
@@ -85,6 +87,13 @@ Source: "{#BuildRoot}\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\binaries\ffmpeg-x86_64-pc-windows-msvc.exe";  DestDir: "{app}"; DestName: "ffmpeg.exe";  Flags: ignoreversion
 Source: "{#SourceRoot}\binaries\ffprobe-x86_64-pc-windows-msvc.exe"; DestDir: "{app}"; DestName: "ffprobe.exe"; Flags: ignoreversion
 Source: "{#SourceRoot}\binaries\yt-dlp-x86_64-pc-windows-msvc.exe";  DestDir: "{app}"; DestName: "yt-dlp.exe";  Flags: ignoreversion
+
+; General Converter. Pandoc is a self-contained executable, so it follows the
+; same externalBin pattern as the three above. PDFium is a library dlopen'd by
+; pdfium-render rather than spawned, so it is a bundle resource instead and
+; keeps its own filename under binaries\, not beside the executable.
+Source: "{#SourceRoot}\binaries\pandoc-x86_64-pc-windows-msvc.exe"; DestDir: "{app}"; DestName: "pandoc.exe"; Flags: ignoreversion
+Source: "{#SourceRoot}\binaries\pdfium.dll"; DestDir: "{app}\binaries"; Flags: ignoreversion
 
 ; whisper.cpp travels as a directory, not a lone file: whisper-cli dlopens
 ; whisper.dll and picks a ggml-cpu backend at runtime from the host's

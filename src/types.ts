@@ -130,6 +130,20 @@ export interface TierStatus {
   installDir: string | null;
 }
 
+/** Whether the speech engine is present, and the tiers it can run. */
+export interface SpeechStatus {
+  engineAvailable: boolean;
+  /**
+   * Ready-to-show explanation of a missing engine, `null` when one is present.
+   *
+   * Separate from the per-tier `available` flag because the macOS build ships
+   * no whisper.cpp: a Mac can hold every model and still not transcribe, and
+   * pointing the user at the model files there would send them nowhere.
+   */
+  engineNote: string | null;
+  tiers: TierStatus[];
+}
+
 export interface TranscribeRequest {
   inputPath: string;
   accuracy: Accuracy;
@@ -162,3 +176,54 @@ export interface TranscriptSummary {
 /** Bounds the backend clamps `wordsPerCaption` to. */
 export const MIN_WORDS_PER_CAPTION = 1;
 export const MAX_WORDS_PER_CAPTION = 20;
+
+// ------------------------------------------------------------- General Converter
+
+/** Mirrors `convert::Category`. */
+export type Category = "image" | "audio" | "video" | "document" | "pdf" | "unknown";
+
+/** Mirrors `convert::Inspection`. */
+export interface Inspection {
+  category: Category;
+  extension: string;
+  /** PDFs only, and only when PDFium could actually open the file. */
+  pageCount: number | null;
+}
+
+/** Mirrors `convert::hardware::HardwareReport`. */
+export interface HardwareReport {
+  videoEncoder: string;
+  videoEncoderIsHardware: boolean;
+  documentsAvailable: boolean;
+  pdfAvailable: boolean;
+  documentsToPdfAvailable: boolean;
+}
+
+export type ImageFormat = "png" | "jpeg" | "webp" | "bmp" | "tiff" | "gif" | "ico";
+export type AudioFormat = "mp3" | "wav" | "flac" | "aac" | "ogg" | "opus" | "m4a";
+export type VideoFormat = "mp4" | "mkv" | "avi" | "webm" | "mov" | "gif";
+export type VideoQuality = "smaller" | "balanced" | "sharper";
+export type DocFormat = "txt" | "markdown" | "html" | "docx" | "odt" | "rtf" | "epub";
+
+/** Mirrors `convert::ConvertOptions` — the internally-tagged Rust enum. */
+export type ConvertOptions =
+  | { kind: "image"; format: ImageFormat; quality?: number | null }
+  | { kind: "audio"; format: AudioFormat }
+  | { kind: "video"; format: VideoFormat; quality?: VideoQuality | null; preferHardware: boolean }
+  | { kind: "document"; format: DocFormat }
+  | { kind: "documentToPdf" }
+  | { kind: "pdfToImages"; format: ImageFormat; dpi: number; pages?: string | null }
+  | { kind: "imagesToPdf" }
+  | { kind: "pdfToText"; pages?: string | null };
+
+export interface ConvertRequest {
+  inputPaths: string[];
+  outputPath: string;
+  options: ConvertOptions;
+}
+
+/** Emitted on `mk://convert-ready` when a conversion job finishes. */
+export interface ConvertSummary {
+  outputPaths: string[];
+  note: string;
+}

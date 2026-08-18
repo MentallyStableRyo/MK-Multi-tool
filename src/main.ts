@@ -9,7 +9,8 @@
  * another.
  */
 
-import { api, onJobProgress, onTranscriptReady, toErrorPayload } from "./bridge";
+import { api, onConvertReady, onJobProgress, onTranscriptReady, toErrorPayload } from "./bridge";
+import { ConverterView } from "./converter";
 import { DEFAULT_PLATFORM, PLATFORMS, platformFor } from "./platforms";
 import { RemoveBackgroundView } from "./removebg";
 import { TOOL_TABS, type Actions, type Chrome, type Tool, type ToolId } from "./tool";
@@ -158,7 +159,9 @@ for (const spec of TOOL_TABS) {
     ? new PlatformView(panel, platform, chrome)
     : spec.id === "transcribe"
       ? new TranscribeView(panel, chrome)
-      : new RemoveBackgroundView(panel, chrome);
+      : spec.id === "convert"
+        ? new ConverterView(panel, chrome)
+        : new RemoveBackgroundView(panel, chrome);
 
   views.set(spec.id, view);
   tabs.set(spec.id, $<HTMLButtonElement>(`tab-${spec.id}`));
@@ -239,6 +242,13 @@ async function boot(): Promise<void> {
   void onTranscriptReady((summary) => {
     const view = views.get("transcribe");
     if (view instanceof TranscribeView) view.acceptSummary(summary);
+  });
+
+  // Same reasoning for finished conversions: the output list (PDF → images
+  // writes one file per page) has no room in the fixed progress event shape.
+  void onConvertReady((summary) => {
+    const view = views.get("convert");
+    if (view instanceof ConverterView) view.acceptSummary(summary);
   });
 
   select(DEFAULT_PLATFORM);

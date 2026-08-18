@@ -1,0 +1,75 @@
+# Builds the macOS (Apple Silicon) app that cannot be produced on Windows.
+#
+# Cross-compiling a Tauri app for macOS is not possible from another OS: the
+# build links against WebKit and AppKit from the Xcode SDK, which Apple licenses
+# for Apple hardware only. A hosted macOS runner is the supported route.
+#
+# Every macOS image from `macos-14` onward is Apple Silicon, so `macos-latest`
+# is always an arm64 host and `aarch64-apple-darwin` compiles natively rather
+# than cross-compiling. Tracking `latest` also survives the image retirements
+# that eventually break a pinned label. Intel Macs would need a second job on
+# `macos-13` with the `x86_64-apple-darwin` target.
+name: macOS build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+# Only the release step writes anything back to the repository.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      # Roughly halves the Rust compile on repeat runs, which matters most on
+      # macOS minutes: they bill at ten times the Linux rate.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      # `setup:mac` deliberately skips the speech engine and its models. Neither
+      # ships on macOS — whisper.cpp publishes no macOS CLI build — so fetching
+      # 608 MB of model weights the app cannot run would only inflate the DMG.
+      # `tauri.macos.conf.json` drops them from the bundle resources to match.
+      - name: Fetch macOS sidecars
+        run: npm run setup:mac
+
+      - name: Build
+        run: npm run build:mac
+
+      # The DMG is roughly half a gigabyte, which would consume the entire 500 MB
+      # artifact allowance on a free plan in one run. Releases are stored
+      # separately and allow up to 2 GB per file, so tagged builds go there and
+      # manual runs keep a short-lived artifact instead.
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          fail_on_unmatched_files: true
+
+      - name: Upload artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mk-multitool-macos-arm64
+          path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          retention-days: 3
+          if-no-files-found: error

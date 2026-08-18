@@ -28,6 +28,7 @@ pub const YTDLP: &str = "yt-dlp";
 pub const FFMPEG: &str = "ffmpeg";
 pub const FFPROBE: &str = "ffprobe";
 pub const WHISPER: &str = "whisper-cli";
+pub const PANDOC: &str = "pandoc";
 
 /// whisper.cpp is not a lone sidecar.
 ///
@@ -47,6 +48,17 @@ pub struct Toolchain {
     pub ytdlp: PathBuf,
     pub ffmpeg: PathBuf,
     pub ffprobe: PathBuf,
+}
+
+impl Toolchain {
+    /// A placeholder for General Converter jobs that never touch FFmpeg,
+    /// FFprobe, or yt-dlp — most of it (images, documents, PDF). These paths
+    /// are never spawned; this exists only because `convert::run` takes one
+    /// unconditional `&Toolchain`, and most of its match arms simply never
+    /// read it.
+    pub fn unused() -> Self {
+        Self { ytdlp: PathBuf::new(), ffmpeg: PathBuf::new(), ffprobe: PathBuf::new() }
+    }
 }
 
 /// Per-tool discovery result surfaced to the UI on startup.
@@ -205,6 +217,74 @@ pub fn resolve(app: &AppHandle) -> Result<Toolchain> {
         ffmpeg: require(app, FFMPEG)?,
         ffprobe: require(app, FFPROBE)?,
     })
+}
+
+/// FFmpeg + FFprobe only. The General Converter's audio/video path never
+/// touches yt-dlp — it converts files already on disk — so a missing yt-dlp
+/// must not block a local conversion the way it correctly blocks a network
+/// resolve in [`resolve`].
+pub fn resolve_media(app: &AppHandle) -> Result<Toolchain> {
+    Ok(Toolchain {
+        ytdlp: PathBuf::new(),
+        ffmpeg: require(app, FFMPEG)?,
+        ffprobe: require(app, FFPROBE)?,
+    })
+}
+
+/// Pandoc is a single self-contained executable on every platform it ships
+/// for, so it slots into the same sidecar convention as yt-dlp/ffmpeg/ffprobe
+/// and needs no resolver of its own.
+pub fn locate_pandoc(app: &AppHandle) -> Option<PathBuf> {
+    locate(app, PANDOC)
+}
+
+/// PDFium's shared-library filename on the current platform.
+fn pdfium_lib_name() -> &'static str {
+    #[cfg(windows)]
+    {
+        "pdfium.dll"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "libpdfium.dylib"
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        "libpdfium.so"
+    }
+}
+
+/// Locate the vendored PDFium library.
+///
+/// Unlike the executables above, this is never looked for on `PATH`: there is
+/// no equivalent of "a system pdfium" to fall back to, and searching the
+/// dynamic linker's search path for an arbitrary named library is far less
+/// reliable across platforms than spawning a named executable is — so a
+/// missing PDFium simply means PDF conversion is unavailable, reported the
+/// same way a missing speech model is.
+pub fn locate_pdfium(app: &AppHandle) -> Option<PathBuf> {
+    let file = pdfium_lib_name();
+    let mut candidates = Vec::with_capacity(4);
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join(file));
+        }
+    }
+    if let Ok(dir) = app.path().resource_dir() {
+        candidates.push(dir.join(file));
+        candidates.push(dir.join("binaries").join(file));
+    }
+    candidates.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries").join(file));
+
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+/// `wkhtmltopdf` is not vendored — see `convert::document::to_pdf` for why —
+/// so this is `PATH`-only, the same fallback the rest of the toolchain already
+/// has for a machine with ffmpeg or yt-dlp installed system-wide.
+pub fn locate_wkhtmltopdf() -> Option<PathBuf> {
+    which::which("wkhtmltopdf").ok()
 }
 
 /// First line of `<tool> --version`, trimmed. Best-effort: `None` if the tool

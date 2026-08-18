@@ -5,9 +5,11 @@ lets you pick an exact time range, and renders just that slice to disk. Tauri +
 Rust backend, no server, no uploads — every byte moves between the site's CDN and
 your machine.
 
-It also carries two tabs that never touch the network at all: **Remove
-Background**, which cuts the subject out of an image, and **Audio → SRT**, which
-transcribes audio or video into subtitles. Both run their models locally.
+It also carries three tabs that never touch the network at all: **Remove
+Background**, which cuts the subject out of an image; **Audio → SRT**, which
+transcribes audio or video into subtitles; and **General Converter**, a local
+batch converter for images, audio, video, documents, and PDFs. All three run
+entirely on your machine.
 
 ---
 
@@ -204,6 +206,103 @@ whisper.cpp publishes no prebuilt binary, `brew install whisper-cpp` puts one on
 
 ---
 
+## General Converter
+
+The seventh tab. Drop in one or more files, pick a target format, choose an
+output folder, and every queued file converts to it in sequence — filenames
+are derived automatically (`<original stem>.<target extension>`), so
+converting a folder of photos is one click rather than one per file.
+
+Five media families, each routed to whichever local tool actually suits it —
+no one dependency stretched thin over all of them:
+
+| Family | Formats | Engine |
+| ------ | ------- | ------ |
+| Images | PNG, JPEG, WebP, BMP, TIFF, GIF, ICO — plus SVG as an input, rasterized | the `image` + `resvg` Rust crates, no vendored binary |
+| Audio | MP3, WAV, FLAC, AAC, OGG, Opus, M4A | the app's own FFmpeg |
+| Video | MP4, MKV, AVI, WebM, MOV, GIF | FFmpeg, hardware-accelerated |
+| Documents | TXT, Markdown, HTML, DOCX, ODT, RTF, EPUB | a vendored Pandoc |
+| PDF | ↔ images (per page), → text (best-effort extraction) | a vendored PDFium |
+
+Everything queued in one batch has to be the same family — a JPEG and an MP3
+have no single target format that makes sense for both, so the queue blocks
+conversion and says so rather than guessing what you meant.
+
+### PDF ↔ Images
+
+The one deliberately bidirectional pair. **PDF → Images** renders selected
+pages (`1-3,5,8-10`, or every page) to PNG/JPEG/WebP at a chosen DPI, one file
+per page. **Images → PDF** goes the other way: queue two or more images and
+check "Combine into one PDF" to get a single multi-page PDF instead of
+converting them separately — a different *shape* of job (many inputs, one
+output), which is why it is a checkbox rather than a format in the dropdown.
+Each page is sized to match its source image exactly, at 96 px/inch — the same
+pixel-to-point assumption a browser makes.
+
+**PDF → Text** pulls the reading-order text out of selected pages. This is
+extraction, not reconstruction: layout, columns, and tables are not reflowed,
+only pulled out — the honest limit of every PDF text extractor, this one
+included. PDF is deliberately *not* a Pandoc target: Pandoc cannot reliably
+read arbitrary PDFs, and writing one needs a LaTeX engine this app does not
+bundle.
+
+PDFium is Google's PDF engine (BSD-3, the same one Chromium uses), vendored as
+a native library and loaded at runtime with [`pdfium-render`][pdfium-render] —
+unlike every other sidecar here it's `dlopen`ed rather than spawned, resolved
+lazily the same way the Remove Background tab's ONNX Runtime is: touched only
+once a PDF conversion is actually requested.
+
+[pdfium-render]: https://github.com/ajrcarey/pdfium-render
+
+### Smart hardware acceleration for video
+
+Video re-encoding probes for a hardware encoder exactly the way the slice
+pipeline does — NVENC → Quick Sync → AMF on Windows, VideoToolbox on macOS,
+NVENC → Quick Sync on Linux — and shows what it found before you convert
+anything. If the detected encoder fails partway through (a real scenario: a
+laptop's discrete GPU can be powered down), the next candidate is tried
+automatically, ending at the software encoder (`libx264`), with no user
+intervention and no failed job. "Use hardware acceleration" can be turned off
+to force software from the start; a mid-render hardware failure is always
+retried in software regardless of that setting, since that failure has
+nothing to do with what was asked for.
+
+Image, PDF, and document conversions have no equivalent toggle: a JPEG encode
+or a Pandoc pass is milliseconds regardless of the GPU, so there is nothing
+for "hardware acceleration" to mean there.
+
+### Documents → PDF
+
+Pandoc renders the source document to standalone HTML, then
+[`wkhtmltopdf`][wkhtmltopdf] prints that HTML to PDF. Unlike Pandoc,
+`wkhtmltopdf` is **not vendored** — its upstream stopped publishing
+Windows/macOS builds, only Debian/RPM packages remain — so this option only
+appears when a `wkhtmltopdf` happens to be on `PATH`, exactly the fallback the
+app already has for a machine with `ffmpeg` or `yt-dlp` installed system-wide.
+Every other document conversion needs nothing extra.
+
+[wkhtmltopdf]: https://wkhtmltopdf.org/
+
+### Setup
+
+```bash
+npm run pandoc                              # vendor Pandoc for the host target
+npm run pdfium                              # vendor PDFium for the host target
+node scripts/fetch-pandoc.mjs --target aarch64-apple-darwin
+node scripts/fetch-pdfium.mjs --all-mac
+```
+
+Both are included in `npm run setup`. Pandoc publishes no `aarch64-pc-windows-msvc`
+build, so that one target falls back to a `pandoc` on `PATH`, the same way
+whisper.cpp does on macOS.
+
+Skipping either step leaves the rest of the app working; the Converter tab
+then reports that specific category as unavailable (Documents, or PDF), names
+the command that vendors it, and disables just that part of the format list
+rather than the whole tab.
+
+---
+
 ## How it works
 
 The interesting part is what the app *doesn't* do: it never downloads the whole
@@ -359,11 +458,16 @@ npm run model
 # ~2.1 GB; use `--tier fast` for the 141 MB tier alone
 npm run whisper
 
+# Vendor Pandoc + PDFium into src-tauri/binaries/ (General Converter)
+# ~240 MB combined
+npm run pandoc
+npm run pdfium
+
 # Generate app-icon.png and expand it into every platform icon format
 npm run icon
 ```
 
-`npm run setup` runs the icon, binary, and model steps in one go.
+`npm run setup` runs all of the above in one go.
 
 `npm run binaries` downloads statically linked builds and names them
 `<tool>-<target-triple><ext>`, which is what Tauri's `externalBin` requires. The
@@ -390,7 +494,7 @@ yt-dlp already installed works without vendoring.
 
 `npm run model` is the only step that fetches the Remove Background assets, and
 it is also the only network access that feature ever involves. Skipping it leaves
-the other four tabs working; the Remove Background tab then reports the missing
+the other six tabs working; the Remove Background tab then reports the missing
 file and names this command.
 
 ---
@@ -405,24 +509,27 @@ Starts Vite on `127.0.0.1:5173` and launches the app with hot reload on the
 frontend. Rust changes trigger a recompile and relaunch.
 
 ```bash
-cd src-tauri && cargo test      # backend unit tests (42, all offline)
+cd src-tauri && cargo test      # backend unit tests (80+, all offline)
 npx tsc --noEmit                # frontend typecheck
 cargo clippy --all-targets      # lints
 ```
 
-There is also a network-backed end-to-end test that drives the real pipeline
-against a real video — resolve, keyframe probe, render, verify — and asserts the
-rendered slice is the requested length and that progress reaches 100%. It is
-`#[ignore]`d so a flaky network can never fail a normal test run:
+Three more are `#[ignore]`d because they need something a normal offline test
+run cannot rely on being present:
 
 ```bash
 cd src-tauri && cargo test -- --ignored --nocapture
 ```
 
-Run it after touching `youtube.rs`, `platform.rs`, `render.rs`, `probe.rs`, or `pipeline.rs`,
-and whenever a YouTube-side change is suspected. It exercises
-`pipeline::execute` — the exact code path the app uses, retries included —
-rather than a reimplementation of it.
+- `smoke::renders_a_real_slice_end_to_end` drives the real pipeline against a
+  real video — resolve, keyframe probe, render, verify — and needs the
+  network. Run it after touching `youtube.rs`, `platform.rs`, `render.rs`,
+  `probe.rs`, or `pipeline.rs`. It exercises `pipeline::execute` — the exact
+  code path the app uses, retries included — rather than a reimplementation.
+- `convert::pdf::images_to_pdf_and_back_round_trips_through_the_real_library`
+  and `convert::document::markdown_to_html_round_trips_through_the_real_binary`
+  drive the real vendored PDFium and Pandoc rather than mocking them, and need
+  `npm run pdfium` / `npm run pandoc` to have vendored them first.
 
 ---
 
@@ -438,9 +545,30 @@ Artifacts land in `src-tauri/target/release/bundle/`.
 
 ```bash
 npm run build
-# → bundle/msi/MK Multi-tool_0.1.0_x64_en-US.msi
-# → bundle/nsis/MK Multi-tool_0.1.0_x64-setup.exe
+# → bundle/nsis/MK Multi-tool_0.6.0_x64-setup.exe
 ```
+
+`msi` is deliberately off the `bundle.targets` list in `tauri.conf.json` —
+Tauri's own MSI builder puts everything in one cabinet, which cannot hold this
+payload (see below) — so `npm run build` only produces the NSIS installer and
+a plain `.exe`/`.app`-less build under `bundle/nsis/` and `bundle/`. It ships
+without the largest whisper tier, the same side-loading the Audio → SRT
+section above describes; Pandoc and PDFium are small enough to ride along
+inside it either way.
+
+For an installer carrying **all three** speech tiers (~2.9 GB total), build
+the app alone and package it with one of the two installers this repo ships
+instead of Tauri's:
+
+```bash
+npx tauri build --no-bundle
+
+iscc installer\mk-multitool.iss          # Inno Setup — recommended, no size cap
+installer\build-msi.cmd                  # WiX MSI — four cabinets, see the file's header
+```
+
+Both mirror the same install layout `binaries.rs` already resolves, so which
+one you ship is a packaging choice, not a compatibility one.
 
 ### macOS — both architectures
 
@@ -449,8 +577,12 @@ Windows or Linux: linking Apple targets needs the macOS SDK and Apple linker,
 and `.app`/`.dmg` packaging needs `codesign` and `hdiutil`. There is no
 workaround.
 
+Without a Mac, build on a hosted one: `.github/workflows/macos.yml` runs these
+same commands on GitHub's Apple Silicon runner — see [Building on GitHub
+Actions](#building-on-github-actions) below.
+
 Everything *else* is ready — the sidecars are vendored and verified from any
-host, so on the Mac it is three commands:
+host, so on the Mac it is a handful of commands:
 
 ```bash
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
@@ -458,6 +590,8 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 npm install
 npm run icon
 npm run binaries:mac        # static ffmpeg/ffprobe + universal yt-dlp, both arches
+npm run pandoc:mac          # Pandoc, both arches (General Converter documents)
+npm run pdfium:mac          # PDFium, both arches (General Converter PDF)
 
 npm run build:mac           # Apple Silicon  → .app + .dmg
 npm run build:mac-intel     # Intel
@@ -489,6 +623,49 @@ were verified to link system frameworks only.
 
 Sidecars land in `Contents/MacOS/` beside the app binary, which is the first
 place the resolver looks — no `PATH` dependency at runtime.
+
+#### Audio → SRT is not available on macOS
+
+whisper.cpp publishes no macOS command-line build. The only Apple asset in its
+releases is a 53 MB xcframework meant for *linking*, and this app spawns
+`whisper-cli` as a sidecar process — using the framework would mean a second,
+FFI-based transcription path for one platform.
+
+So the macOS bundle ships neither the engine nor the ~608 MB of model weights
+that would be dead payload without it. `tauri.macos.conf.json` drops both from
+`bundle.resources`, and `npm run setup:mac` skips fetching them — which is why
+the macOS setup is `setup:mac`, not `setup`.
+
+The tab still loads and says why it cannot run rather than failing at the point
+of use. Both halves are recoverable by the user:
+
+```bash
+brew install whisper-cpp   # the engine; `locate_whisper` falls back to PATH
+```
+
+Once the engine is found, the tab switches to naming the model files it still
+needs and the folder to drop them in — the same side-loading path Windows uses
+for the largest tier.
+
+#### Building on GitHub Actions
+
+`.github/workflows/macos.yml` builds the Apple Silicon DMG on a hosted runner.
+Trigger it from the **Actions** tab via *Run workflow*, or push a `v*` tag to
+build and attach the DMG to a GitHub release.
+
+Two constraints shaped it:
+
+- **macOS minutes bill at 10×** the Linux rate against a free account's monthly
+  allowance, so `Swatinem/rust-cache` is in the loop to keep repeat builds
+  short. Public repositories are not metered at all.
+- **The DMG is roughly half a gigabyte**, which would consume the entire 500 MB
+  artifact allowance on a free plan in one run. Tagged builds therefore go to a
+  release — stored separately, 2 GB per file — and manual runs keep a
+  3-day artifact instead.
+
+`runs-on` is `macos-latest` rather than a pinned image: every macOS runner from
+`macos-14` onward is Apple Silicon, so `latest` is always arm64 and does not
+break when an image is retired.
 
 #### Minimum macOS version
 
@@ -581,6 +758,7 @@ src/                    Frontend (TypeScript, no framework — ~57 KB bundled)
   removebg.ts           The Remove Background workspace
   matte.ts              Local segmentation: lazy ONNX Runtime, U²-Net, compositing
   transcribe.ts         The Audio → SRT workspace
+  converter.ts          The General Converter workspace: file queue → one target format
   bridge.ts             The only place that talks to Rust
   timeline.ts           Dual-handle range scrubber with a live playhead
   time.ts               Timecode parsing/formatting, mirrors timecode.rs
@@ -594,6 +772,13 @@ src-tauri/src/
   render.rs             Cut planning and the FFmpeg invocation
   transcribe.rs         Audio → SRT: decode, run whisper.cpp, group captions
   srt.rs                Tokens → words → captions → SRT (pure, unit-tested)
+  convert/              The General Converter
+    mod.rs                 Category detection, request dispatch, job orchestration
+    raster.rs              Images: the `image` crate + `resvg` for SVG input
+    media.rs               Audio/video: FFmpeg, hardware encoder tables + fallback
+    document.rs             Documents: Pandoc, and Documents → PDF via wkhtmltopdf
+    pdf.rs                  PDF ↔ images and PDF → text via PDFium
+    hardware.rs             The capability report the UI shows before converting
   probe.rs              ffprobe keyframe and duration queries
   disk.rs               Free-space verification
   staging.rs            Atomic output commits
@@ -609,6 +794,8 @@ scripts/
   fetch-binaries.mjs    Vendors sidecars for the host triple
   fetch-model.mjs       Vendors the segmentation model + ONNX Runtime into public/
   fetch-whisper.mjs     Vendors whisper.cpp + speech models into src-tauri/binaries/
+  fetch-pandoc.mjs      Vendors Pandoc for the General Converter's Documents category
+  fetch-pdfium.mjs      Vendors PDFium for the General Converter's PDF category
   gen-icon.mjs          Generates app-icon.png (hand-rolled PNG encoder)
 
 public/                 Gitignored build inputs, served from the app's own origin

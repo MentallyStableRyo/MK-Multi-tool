@@ -11,10 +11,15 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type { PlatformId } from "./platforms";
 import type {
+  ConvertOptions,
+  ConvertRequest,
+  ConvertSummary,
   ErrorPayload,
+  HardwareReport,
+  Inspection,
   JobEvent,
   SliceRequest,
-  TierStatus,
+  SpeechStatus,
   ToolchainStatus,
   TranscribeRequest,
   TranscriptSummary,
@@ -23,6 +28,7 @@ import type {
 
 const PROGRESS_EVENT = "mk://job-progress";
 const TRANSCRIPT_EVENT = "mk://transcript-ready";
+const CONVERT_EVENT = "mk://convert-ready";
 
 /** Coerce anything thrown across the IPC boundary into an `ErrorPayload`. */
 export function toErrorPayload(value: unknown): ErrorPayload {
@@ -66,7 +72,7 @@ export const api = {
   cancelJob: (jobId: string) => call<boolean>("cancel_job", { jobId }),
 
   /** Which speech tiers have their model installed. */
-  transcriptionTiers: () => call<TierStatus[]>("transcription_tiers"),
+  transcriptionTiers: () => call<SpeechStatus>("transcription_tiers"),
 
   startTranscription: (request: TranscribeRequest) =>
     call<string>("start_transcription", { request }),
@@ -82,6 +88,21 @@ export const api = {
     call<void>("write_file", { path, contentsBase64: toBase64(bytes) }),
 
   revealInFolder: (path: string) => call<void>("reveal_in_folder", { path }),
+
+  /** Smart hardware-acceleration + tool-availability report for the Converter. */
+  convertHardwareReport: () => call<HardwareReport>("convert_hardware_report"),
+
+  /** Classify a dropped/picked file: which family it belongs to, and — for a
+   * PDF — how many pages it has. */
+  convertInspect: (path: string) => call<Inspection>("convert_inspect", { path }),
+
+  /** The extension a given target produces, for naming outputs and building
+   * the destination path — kept in Rust so the format tables live in one
+   * place rather than a second copy in TypeScript. */
+  convertTargetExtension: (options: ConvertOptions) =>
+    call<string>("convert_target_extension", { options }),
+
+  startConversion: (request: ConvertRequest) => call<string>("start_conversion", { request }),
 };
 
 /**
@@ -119,4 +140,15 @@ export function onTranscriptReady(
   handler: (summary: TranscriptSummary) => void,
 ): Promise<UnlistenFn> {
   return listen<TranscriptSummary>(TRANSCRIPT_EVENT, (message) => handler(message.payload));
+}
+
+/**
+ * Subscribe to finished conversions.
+ *
+ * Rides its own channel for the same reason a finished transcript does: the
+ * progress event's fixed shape has no room for a multi-file output list
+ * (PDF → images writes one file per page).
+ */
+export function onConvertReady(handler: (summary: ConvertSummary) => void): Promise<UnlistenFn> {
+  return listen<ConvertSummary>(CONVERT_EVENT, (message) => handler(message.payload));
 }
