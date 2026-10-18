@@ -1,20 +1,25 @@
 /**
- * Vendors the sidecar binaries Tauri bundles into the app:
- * yt-dlp, ffmpeg, and ffprobe.
+ * Optional dev-only vendoring of yt-dlp, ffmpeg, and ffprobe.
+ *
+ * These three are NOT bundled with the app any more — the shipped build
+ * resolves them from the user's own PATH (see `src-tauri/src/binaries.rs`), so
+ * this script is not part of `npm run setup` and is not needed to produce a
+ * release. It exists for one case: a dev machine with no system FFmpeg or
+ * yt-dlp that still wants `tauri dev` and the smoke tests to run. `binaries.rs`
+ * checks `src-tauri/binaries/` after PATH, so whatever lands here is picked up
+ * as a fallback and never shadows a real install.
  *
  *   node scripts/fetch-binaries.mjs                              # host target
  *   node scripts/fetch-binaries.mjs --target aarch64-apple-darwin
  *   node scripts/fetch-binaries.mjs --target universal-apple-darwin
  *   node scripts/fetch-binaries.mjs --all-mac                    # both mac arches
  *
- * Tauri's `externalBin` requires each file to be named `<name>-<triple><ext>`;
- * the suffix is stripped when the app is laid down. Files go to
- * `src-tauri/binaries/` and are gitignored — build inputs, not source.
+ * Files are named `<name>-<triple><ext>` — the layout Tauri's `externalBin`
+ * used to require, and still what the dev-tree lookup expects. They go to
+ * `src-tauri/binaries/` and are gitignored: build inputs, not source.
  *
- * Every binary vendored here is statically linked against system libraries
- * only, so the bundled app has no dependency on Homebrew, apt, or anything else
- * on the end user's machine. This is verified for macOS by inspecting the
- * Mach-O load commands (see `--verify`).
+ * The macOS binaries are statically linked against system libraries only,
+ * verified by inspecting the Mach-O load commands (see `verifyMachO`).
  */
 
 import { spawnSync } from "node:child_process";

@@ -12,6 +12,8 @@ export interface ToolStatus {
   found: boolean;
   path: string | null;
   version: string | null;
+  /** How to install it, present only when the tool is missing. */
+  hint: string | null;
 }
 
 export interface ToolchainStatus {

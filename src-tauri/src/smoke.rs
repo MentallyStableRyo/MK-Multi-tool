@@ -36,12 +36,18 @@ const EXE: &str = ".exe";
 #[cfg(not(windows))]
 const EXE: &str = "";
 
-/// Resolve the vendored sidecars without needing a Tauri `AppHandle`.
+/// Resolve the media toolchain without needing a Tauri `AppHandle`.
+///
+/// Same priority as `binaries::locate`: the user's own install first, then the
+/// dev tree, so this test exercises whatever the app itself would have spawned.
 fn dev_toolchain() -> Option<Toolchain> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries");
     let triple = env!("MK_TARGET_TRIPLE");
 
     let find = |stem: &str| -> Option<PathBuf> {
+        if let Ok(system) = which::which_global(stem) {
+            return Some(system);
+        }
         let suffixed = dir.join(format!("{stem}-{triple}{EXE}"));
         if suffixed.is_file() {
             return Some(suffixed);
@@ -50,7 +56,7 @@ fn dev_toolchain() -> Option<Toolchain> {
         if plain.is_file() {
             return Some(plain);
         }
-        which::which(stem).ok()
+        None
     };
 
     Some(Toolchain {
@@ -64,7 +70,7 @@ fn dev_toolchain() -> Option<Toolchain> {
 #[ignore = "hits the network; run with --ignored"]
 async fn renders_a_real_slice_end_to_end() {
     let Some(toolchain) = dev_toolchain() else {
-        panic!("sidecars not vendored — run `npm run binaries` first");
+        panic!("no ffmpeg/ffprobe/yt-dlp on PATH — install them, or run `npm run binaries`");
     };
     let cancel = CancellationToken::new();
 

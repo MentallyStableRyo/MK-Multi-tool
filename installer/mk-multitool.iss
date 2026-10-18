@@ -1,8 +1,8 @@
 ; Windows installer for MK Multi-tool.
 ;
 ; Inno Setup rather than NSIS or MSI, for one reason: size. With all three
-; speech models bundled the payload is about 2.9 GB (2.6 GB before the General
-; Converter's Pandoc and PDFium were added), and both of Tauri's Windows
+; speech models bundled the payload is about 2.7 GB (FFmpeg and yt-dlp have
+; since moved out to the user's own PATH), and both of Tauri's Windows
 ; targets cap below 2 GB — MSI at the 2 GB CAB format limit (`LGHT0306`, CAB
 ; finalization), NSIS at makensis's 32-bit file mapping (`error mmapping
 ; file ... is out of range`). Both were built and both failed.
@@ -16,7 +16,7 @@
 ; `binaries.rs` resolves the sidecars and models identically either way:
 ;
 ;   <install>\mk-multitool.exe
-;   <install>\ffmpeg.exe  ffprobe.exe  yt-dlp.exe  pandoc.exe   (externalBin, suffix stripped)
+;   <install>\pandoc.exe                                        (externalBin, suffix stripped)
 ;   <install>\binaries\pdfium.dll                               (bundle resource — a library, not spawned)
 ;   <install>\binaries\whisper\*.dll  whisper-cli.exe  manifest.json
 ;   <install>\binaries\whisper\models\*.bin
@@ -56,9 +56,9 @@ ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir={#BuildRoot}\bundle\inno
 OutputBaseFilename={#AppName}_{#AppVersion}_x64-setup
 
-; The models are already compressed weights and barely shrink, but the two
-; ~140 MB FFmpeg binaries and the app's own 174 MB do. Solid LZMA2 across the
-; lot is worth the slower compile.
+; The models are already compressed weights and barely shrink, but Pandoc and
+; the app's own 174 MB do. Solid LZMA2 across the lot is worth the slower
+; compile.
 Compression=lzma2/max
 SolidCompression=yes
 LZMANumBlockThreads=4
@@ -82,16 +82,17 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 ; it is ~174 MB rather than a few megabytes.
 Source: "{#BuildRoot}\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
-; Sidecars. Tauri's externalBin strips the target triple at bundle time; these
-; DestName entries reproduce that, because binaries.rs looks for the bare names.
-Source: "{#SourceRoot}\binaries\ffmpeg-x86_64-pc-windows-msvc.exe";  DestDir: "{app}"; DestName: "ffmpeg.exe";  Flags: ignoreversion
-Source: "{#SourceRoot}\binaries\ffprobe-x86_64-pc-windows-msvc.exe"; DestDir: "{app}"; DestName: "ffprobe.exe"; Flags: ignoreversion
-Source: "{#SourceRoot}\binaries\yt-dlp-x86_64-pc-windows-msvc.exe";  DestDir: "{app}"; DestName: "yt-dlp.exe";  Flags: ignoreversion
+; FFmpeg, FFprobe and yt-dlp are deliberately absent: the app resolves them
+; from the user's own PATH instead (see binaries.rs). Bundling them added
+; ~190 MB to a payload already fighting a size ceiling, and pinned a yt-dlp
+; build that goes stale the next time YouTube changes anything.
 
-; General Converter. Pandoc is a self-contained executable, so it follows the
-; same externalBin pattern as the three above. PDFium is a library dlopen'd by
-; pdfium-render rather than spawned, so it is a bundle resource instead and
-; keeps its own filename under binaries\, not beside the executable.
+; General Converter. Pandoc is a self-contained executable and follows Tauri's
+; externalBin pattern, which strips the target triple at bundle time; the
+; DestName below reproduces that, because binaries.rs looks for the bare name.
+; PDFium is a library dlopen'd by pdfium-render rather than spawned, so it is a
+; bundle resource instead and keeps its own filename under binaries\, not
+; beside the executable.
 Source: "{#SourceRoot}\binaries\pandoc-x86_64-pc-windows-msvc.exe"; DestDir: "{app}"; DestName: "pandoc.exe"; Flags: ignoreversion
 Source: "{#SourceRoot}\binaries\pdfium.dll"; DestDir: "{app}\binaries"; Flags: ignoreversion
 
@@ -104,6 +105,15 @@ Source: "{#SourceRoot}\binaries\whisper\manifest.json";    DestDir: "{app}\binar
 
 ; All three speech models — the reason this is an Inno installer at all.
 Source: "{#SourceRoot}\binaries\whisper\models\*.bin"; DestDir: "{app}\binaries\whisper\models"; Flags: ignoreversion
+
+[InstallDelete]
+; Versions up to 0.6.0 installed FFmpeg, FFprobe and yt-dlp beside the exe.
+; They are resolved from the user's PATH now, so an upgrade should clear the
+; old copies rather than leave a yt-dlp that stopped working months ago as a
+; silent fallback.
+Type: files; Name: "{app}\ffmpeg.exe"
+Type: files; Name: "{app}\ffprobe.exe"
+Type: files; Name: "{app}\yt-dlp.exe"
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"

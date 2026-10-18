@@ -44,10 +44,16 @@ jobs:
 
       - run: npm ci
 
-      # `setup:mac` deliberately skips the speech engine and its models. Neither
-      # ships on macOS — whisper.cpp publishes no macOS CLI build — so fetching
-      # 608 MB of model weights the app cannot run would only inflate the DMG.
+      # `setup:mac` fetches Pandoc and PDFium only.
+      #
+      # It skips the speech engine and its models: neither ships on macOS —
+      # whisper.cpp publishes no macOS CLI build — so fetching 608 MB of model
+      # weights the app cannot run would only inflate the DMG.
       # `tauri.macos.conf.json` drops them from the bundle resources to match.
+      #
+      # FFmpeg and yt-dlp are not fetched either: the app resolves them from the
+      # user's PATH, so the DMG asks for `brew install ffmpeg yt-dlp` instead of
+      # carrying ~190 MB of binaries that go stale.
       - name: Fetch macOS sidecars
         run: npm run setup:mac
 

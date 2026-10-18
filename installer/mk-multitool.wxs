@@ -6,10 +6,10 @@
   single cabinet, and Windows Installer caps a CAB at 2 GB, so `light.exe`
   fails with `LGHT0306 - An error (E_FAIL) was returned while finalizing a CAB
   file`. The limit is per cabinet rather than per package, so this source splits
-  the ~2.9 GB across four Media elements. The largest, holding the 1.5 GB speech
-  model, stays comfortably inside the limit — as does Media 2, which also
-  carries Pandoc (the General Converter's ~230 MB document engine) alongside
-  the other sidecars.
+  the ~2.7 GB across four Media elements. The largest, holding the 1.5 GB speech
+  model, stays comfortably inside the limit — as does Media 2, which carries
+  Pandoc (the General Converter's ~230 MB document engine), PDFium and the
+  whisper.cpp runtime.
 
   Build with installer\build-msi.cmd, after building the binary alone via
   tauri's no-bundle flag. (Spelled out in build-msi.cmd, which unlike an XML
@@ -111,25 +111,13 @@
       </Component>
 
       <!-- ========================= Media 2: sidecars =================== -->
-      <!-- Tauri's externalBin strips the target triple when it lays these
-           down; the Name attributes reproduce that, because binaries.rs looks
-           for the bare names. -->
-      <Component Id="FfmpegExe" Guid="*">
-        <File Id="Ffmpeg" Source="$(var.SourceDir)\binaries\ffmpeg-x86_64-pc-windows-msvc.exe"
-              Name="ffmpeg.exe" KeyPath="yes" DiskId="2" />
-      </Component>
-      <Component Id="FfprobeExe" Guid="*">
-        <File Id="Ffprobe" Source="$(var.SourceDir)\binaries\ffprobe-x86_64-pc-windows-msvc.exe"
-              Name="ffprobe.exe" KeyPath="yes" DiskId="2" />
-      </Component>
-      <Component Id="YtDlpExe" Guid="*">
-        <File Id="YtDlp" Source="$(var.SourceDir)\binaries\yt-dlp-x86_64-pc-windows-msvc.exe"
-              Name="yt-dlp.exe" KeyPath="yes" DiskId="2" />
-      </Component>
+      <!-- FFmpeg, FFprobe and yt-dlp are not installed here: the app
+           resolves those from the user's own PATH (see binaries.rs). -->
 
       <!-- Pandoc: General Converter documents (TXT/Markdown/HTML/DOCX/ODT/RTF/
-           EPUB). Single self-contained executable, same externalBin naming
-           convention as the three above — installs beside mk-multitool.exe. -->
+           EPUB). Single self-contained executable; Tauri's externalBin strips
+           the target triple when it lays it down, and the Name attribute
+           reproduces that, because binaries.rs looks for the bare name. -->
       <Component Id="PandocExe" Guid="*">
         <File Id="Pandoc" Source="$(var.SourceDir)\binaries\pandoc-x86_64-pc-windows-msvc.exe"
               Name="pandoc.exe" KeyPath="yes" DiskId="2" />
@@ -230,9 +218,6 @@
              ConfigurableDirectory="INSTALLFOLDER">
       <ComponentRef Id="MainExecutable" />
       <ComponentRef Id="AppMenuFolderEntry" />
-      <ComponentRef Id="FfmpegExe" />
-      <ComponentRef Id="FfprobeExe" />
-      <ComponentRef Id="YtDlpExe" />
       <ComponentRef Id="PandocExe" />
       <ComponentRef Id="PdfiumDll" />
       <ComponentRef Id="WhisperCli" />

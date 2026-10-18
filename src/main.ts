@@ -263,22 +263,31 @@ async function boot(): Promise<void> {
 
   try {
     const status = await api.checkToolchain();
-    const missing = status.tools.filter((t) => !t.found).map((t) => t.name);
+    const missing = status.tools.filter((t) => !t.found);
+    const names = missing.map((t) => t.name);
     const tooltip = status.tools
       .map((t) => `${t.name}: ${t.version ?? t.path ?? "not found"}`)
       .join("\n");
 
     syncToolchain(
       status.ready,
-      status.ready ? "Tools ready" : `Missing: ${missing.join(", ")}`,
+      status.ready ? "Tools ready" : `Missing: ${names.join(", ")}`,
       tooltip,
     );
 
     if (!status.ready) {
+      // ffmpeg and ffprobe ship in the same package, so their two hints are
+      // one sentence repeated — dedupe rather than telling the user to run
+      // `brew install ffmpeg` twice.
+      const hints = [
+        ...new Set(missing.map((t) => t.hint).filter((h): h is string => Boolean(h))),
+      ];
       showShellError({
         kind: "missing_binary",
-        message: `Required tools are unavailable: ${missing.join(", ")}.`,
-        hint: "Run `npm run binaries` to vendor them into src-tauri/binaries, or install them so they are on your PATH.",
+        message: `Required tools are unavailable: ${names.join(", ")}.`,
+        hint:
+          hints.join(" ") ||
+          "Install them and make sure they are on your PATH, then restart the app.",
       });
     }
   } catch (raw) {

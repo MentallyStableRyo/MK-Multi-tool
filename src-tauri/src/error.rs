@@ -267,15 +267,20 @@ impl AppError {
         match self {
             Self::Youtube { kind, .. } => kind.hint().map(str::to_string),
             Self::MissingBinary { name } => {
-                // Each sidecar has its own vendoring script; naming the wrong
-                // one would send the user to run something that does nothing
-                // for the tool that's actually missing.
+                // yt-dlp, ffmpeg and ffprobe come from the user's own package
+                // manager rather than the bundle, so their advice is an install
+                // command — see `binaries::install_hint`.
+                if let Some(hint) = crate::binaries::install_hint(name) {
+                    return Some(hint);
+                }
+                // Everything else is vendored, and each sidecar has its own
+                // vendoring script; naming the wrong one would send the user to
+                // run something that does nothing for the missing tool.
                 let vendor_command = match name.as_str() {
                     "pandoc" => "npm run pandoc",
                     "pdfium" => "npm run pdfium",
-                    "wkhtmltopdf" => "",
                     "whisper-cli" => "npm run whisper",
-                    _ => "npm run binaries",
+                    _ => "",
                 };
                 Some(if vendor_command.is_empty() {
                     format!(
@@ -439,12 +444,28 @@ mod tests {
         assert!(hint_for("pandoc").contains("npm run pandoc"));
         assert!(hint_for("pdfium").contains("npm run pdfium"));
         assert!(hint_for("whisper-cli").contains("npm run whisper"));
-        assert!(hint_for("ffmpeg").contains("npm run binaries"));
 
         // wkhtmltopdf is deliberately never vendored (see convert::document::to_pdf),
         // so its hint must not send anyone to a command that vendors nothing.
         let wk = hint_for("wkhtmltopdf");
         assert!(!wk.contains("npm run"));
         assert!(wk.contains("PATH"));
+    }
+
+    #[test]
+    fn system_tool_hints_name_an_install_command_not_a_vendoring_one() {
+        let hint_for = |name: &str| AppError::MissingBinary { name: name.to_string() }.hint().unwrap();
+
+        for name in ["ffmpeg", "ffprobe", "yt-dlp"] {
+            let hint = hint_for(name);
+            // These come from the user's package manager now, so pointing at a
+            // vendoring script would be advice they cannot act on.
+            assert!(!hint.contains("npm run"), "{name}: {hint}");
+            assert!(hint.contains("install"), "{name}: {hint}");
+        }
+
+        // ffprobe has no package of its own; it has to name FFmpeg instead.
+        assert!(hint_for("ffprobe").contains("FFmpeg"));
+        assert!(hint_for("yt-dlp").contains("yt-dlp"));
     }
 }

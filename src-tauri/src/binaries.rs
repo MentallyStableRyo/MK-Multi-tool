@@ -1,11 +1,27 @@
-//! Locating the three external tools the app drives: yt-dlp, ffmpeg, ffprobe.
+//! Locating the external tools the app drives.
 //!
-//! Resolution order, first hit wins:
+//! Tools fall into two classes, and they resolve in opposite directions.
+//!
+//! **System tools** — yt-dlp, ffmpeg, ffprobe. These are *not* bundled. The
+//! user installs them with their own package manager and the app finds them.
+//! Three reasons: yt-dlp breaks whenever YouTube changes and has to be updated
+//! on its own cadence, not ours; FFmpeg is ~140 MB per binary and the installer
+//! was already fighting a 2 GB ceiling; and shipping GPL FFmpeg builds inside a
+//! closed bundle is a licensing question that simply does not arise when the
+//! user supplies their own. They resolve `PATH` first — see [`locate_system`].
+//!
+//! **Bundled tools** — pandoc, whisper-cli, PDFium. These have no useful
+//! system install to defer to, so they travel with the app and resolve from the
+//! bundle first, falling back to `PATH` for a machine that happens to have one.
+//!
+//! Bundle-relative lookup order, first hit wins:
 //!   1. Next to the running executable — where Tauri installs `externalBin`
 //!      sidecars (the `-<triple>` suffix is stripped at bundle time).
 //!   2. The bundle resource directory (macOS `.app/Contents/Resources`).
 //!   3. `src-tauri/binaries/<name>[-<triple>]` — the `tauri dev` layout.
-//!   4. The system `PATH`, so a Homebrew/apt/winget install just works.
+//!
+//! A system tool still checks those three afterwards, so a dev tree that ran
+//! `npm run binaries` keeps working without a system install.
 
 use std::path::{Path, PathBuf};
 
@@ -29,6 +45,126 @@ pub const FFMPEG: &str = "ffmpeg";
 pub const FFPROBE: &str = "ffprobe";
 pub const WHISPER: &str = "whisper-cli";
 pub const PANDOC: &str = "pandoc";
+
+/// True for the tools the user is expected to install themselves.
+fn is_system_tool(stem: &str) -> bool {
+    matches!(stem, YTDLP | FFMPEG | FFPROBE)
+}
+
+/// Well-known install directories to check when a system tool is not on `PATH`.
+///
+/// This exists because of one specific trap: a GUI app launched from Finder,
+/// the Dock, or Spotlight inherits launchd's minimal `PATH`
+/// (`/usr/bin:/bin:/usr/sbin:/sbin`) rather than the shell's, so Homebrew's
+/// `/opt/homebrew/bin` is invisible to `which` even though `ffmpeg` runs fine
+/// in the user's terminal. The equivalent gap on Windows is a package manager
+/// whose shim directory was added to `PATH` after the app was launched, and on
+/// Linux a `~/.local/bin` that only the login shell exports.
+fn system_dirs() -> Vec<PathBuf> {
+    let mut out = Vec::with_capacity(8);
+    let home = dirs::home_dir();
+
+    #[cfg(target_os = "macos")]
+    {
+        // Apple Silicon Homebrew, Intel Homebrew, MacPorts.
+        out.push(PathBuf::from("/opt/homebrew/bin"));
+        out.push(PathBuf::from("/usr/local/bin"));
+        out.push(PathBuf::from("/opt/local/bin"));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        out.push(PathBuf::from("/usr/local/bin"));
+        out.push(PathBuf::from("/usr/bin"));
+        out.push(PathBuf::from("/snap/bin"));
+    }
+
+    #[cfg(windows)]
+    {
+        // winget's shim directory, Chocolatey, Scoop, and the two places a
+        // hand-unzipped FFmpeg conventionally lands.
+        if let Some(local) = dirs::data_local_dir() {
+            out.push(local.join("Microsoft").join("WinGet").join("Links"));
+        }
+        if let Ok(data) = std::env::var("ProgramData") {
+            out.push(Path::new(&data).join("chocolatey").join("bin"));
+        }
+        if let Some(ref home) = home {
+            out.push(home.join("scoop").join("shims"));
+        }
+        if let Ok(files) = std::env::var("ProgramFiles") {
+            out.push(Path::new(&files).join("ffmpeg").join("bin"));
+        }
+        out.push(PathBuf::from(r"C:\ffmpeg\bin"));
+    }
+
+    if let Some(home) = home {
+        out.push(home.join(".local").join("bin"));
+    }
+    out
+}
+
+/// Find a tool the way a user would expect: `PATH` first, then the handful of
+/// directories a package manager might have installed it into without the app
+/// seeing the updated `PATH`.
+///
+/// `which_global` rather than `which`: the latter also searches the process's
+/// current directory, which for a GUI app is whatever the OS happened to hand
+/// it — not somewhere a user deliberately put a trusted `ffmpeg.exe`.
+pub fn locate_system(stem: &str) -> Option<PathBuf> {
+    if let Ok(found) = which::which_global(stem) {
+        return Some(found);
+    }
+    let file = format!("{stem}{EXE_SUFFIX}");
+    system_dirs().into_iter().map(|dir| dir.join(&file)).find(|p| p.is_file())
+}
+
+/// How to install a system tool, phrased for the host platform.
+///
+/// Naming the actual command matters more than it looks: "install ffmpeg and
+/// put it on your PATH" is advice, `winget install ffmpeg` is something the
+/// user can paste.
+pub fn install_hint(name: &str) -> Option<String> {
+    let (tool, command) = match name {
+        // ffprobe has no package of its own — it ships inside FFmpeg, so a
+        // missing ffprobe means the same install as a missing ffmpeg.
+        FFMPEG | FFPROBE => (
+            "FFmpeg",
+            if cfg!(windows) {
+                "winget install ffmpeg"
+            } else if cfg!(target_os = "macos") {
+                "brew install ffmpeg"
+            } else {
+                "sudo apt install ffmpeg"
+            },
+        ),
+        YTDLP => (
+            "yt-dlp",
+            if cfg!(windows) {
+                "winget install yt-dlp.yt-dlp"
+            } else if cfg!(target_os = "macos") {
+                "brew install yt-dlp"
+            } else {
+                "sudo apt install yt-dlp"
+            },
+        ),
+        _ => return None,
+    };
+
+    let note = if name == FFPROBE {
+        " (ffprobe ships with FFmpeg)"
+    } else {
+        ""
+    };
+    // Linux has no single right command, so apt is offered as an example
+    // rather than an instruction a Fedora or Arch user would have to translate.
+    let how = if cfg!(any(windows, target_os = "macos")) {
+        format!("Install it with `{command}`")
+    } else {
+        format!("Install it with your package manager (e.g. `{command}`)")
+    };
+    Some(format!("{tool} is not installed{note}. {how}, then restart the app."))
+}
 
 /// whisper.cpp is not a lone sidecar.
 ///
@@ -68,6 +204,9 @@ pub struct ToolStatus {
     pub found: bool,
     pub path: Option<String>,
     pub version: Option<String>,
+    /// Install instructions, present only when the tool is missing and the
+    /// user is the one expected to supply it.
+    pub hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,14 +244,23 @@ fn candidates(app: &AppHandle, stem: &str) -> Vec<PathBuf> {
 }
 
 /// Locate a single tool, or `None` if it is nowhere to be found.
+///
+/// System tools look outward first and only then at the bundle; bundled tools
+/// do the reverse. Either way both sets of locations are searched, so neither
+/// class can be broken by the other's absence.
 pub fn locate(app: &AppHandle, stem: &str) -> Option<PathBuf> {
+    if is_system_tool(stem) {
+        if let Some(found) = locate_system(stem) {
+            return Some(found);
+        }
+    }
     for candidate in candidates(app, stem) {
         if candidate.is_file() {
             return Some(candidate);
         }
     }
-    // 4. PATH fallback.
-    which::which(stem).ok()
+    // PATH fallback for the bundled tools, which skipped it above.
+    which::which_global(stem).ok()
 }
 
 fn require(app: &AppHandle, stem: &str) -> Result<PathBuf> {
@@ -173,7 +321,7 @@ pub fn locate_whisper(app: &AppHandle) -> Option<PathBuf> {
             return Some(candidate);
         }
     }
-    which::which(WHISPER).ok()
+    which::which_global(WHISPER).ok()
 }
 
 pub fn require_whisper(app: &AppHandle) -> Result<PathBuf> {
@@ -284,7 +432,7 @@ pub fn locate_pdfium(app: &AppHandle) -> Option<PathBuf> {
 /// so this is `PATH`-only, the same fallback the rest of the toolchain already
 /// has for a machine with ffmpeg or yt-dlp installed system-wide.
 pub fn locate_wkhtmltopdf() -> Option<PathBuf> {
-    which::which("wkhtmltopdf").ok()
+    which::which_global("wkhtmltopdf").ok()
 }
 
 /// First line of `<tool> --version`, trimmed. Best-effort: `None` if the tool
@@ -309,13 +457,17 @@ pub async fn status(app: &AppHandle) -> ToolchainStatus {
         match locate(app, stem) {
             Some(path) => {
                 let version = version_of(&path, "--version").await;
+                // A binary that exists but cannot report a version is broken
+                // (bad architecture, quarantined, not executable) — which for
+                // the user is the same problem as not having it at all, so it
+                // gets the same install advice.
+                let found = version.is_some();
                 tools.push(ToolStatus {
                     name: stem.to_string(),
-                    // A binary that exists but cannot report a version is broken
-                    // (bad architecture, quarantined, not executable).
-                    found: version.is_some(),
+                    found,
                     path: Some(path.to_string_lossy().into_owned()),
                     version,
+                    hint: if found { None } else { install_hint(stem) },
                 });
             }
             None => tools.push(ToolStatus {
@@ -323,6 +475,7 @@ pub async fn status(app: &AppHandle) -> ToolchainStatus {
                 found: false,
                 path: None,
                 version: None,
+                hint: install_hint(stem),
             }),
         }
     }
@@ -330,5 +483,38 @@ pub async fn status(app: &AppHandle) -> ToolchainStatus {
     ToolchainStatus {
         ready: tools.iter().all(|t| t.found),
         tools,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// PATH lookup is the entire contract for the user-supplied tools, so it is
+    /// worth asserting — but a machine without FFmpeg installed must not fail
+    /// the suite, hence the early return rather than an unwrap.
+    #[test]
+    fn system_lookup_finds_ffmpeg_when_it_is_installed() {
+        let Some(found) = locate_system(FFMPEG) else {
+            eprintln!("skipped: no ffmpeg on this machine");
+            return;
+        };
+        eprintln!("resolved ffmpeg -> {}", found.display());
+        assert!(found.is_file());
+        assert_eq!(found.file_stem().unwrap().to_string_lossy(), FFMPEG);
+    }
+
+    /// Install advice is only ever right for the tools the user installs. A
+    /// hint on a bundled tool would tell them to fix something they cannot.
+    #[test]
+    fn only_user_supplied_tools_get_install_hints() {
+        for name in [FFMPEG, FFPROBE, YTDLP] {
+            assert!(install_hint(name).is_some(), "{name} should have one");
+            assert!(is_system_tool(name));
+        }
+        for name in [PANDOC, WHISPER, "pdfium"] {
+            assert!(install_hint(name).is_none(), "{name} should not have one");
+            assert!(!is_system_tool(name));
+        }
     }
 }

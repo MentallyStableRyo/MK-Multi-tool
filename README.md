@@ -11,6 +11,24 @@ transcribes audio or video into subtitles; and **General Converter**, a local
 batch converter for images, audio, video, documents, and PDFs. All three run
 entirely on your machine.
 
+**FFmpeg and yt-dlp are not bundled.** The app drives whichever ones are
+installed on your system, so install them once with your package manager and
+keep them updated on their own schedule — which matters most for yt-dlp, whose
+whole job is keeping up with sites that change weekly:
+
+```bash
+winget install ffmpeg yt-dlp.yt-dlp   # Windows
+brew install ffmpeg yt-dlp            # macOS
+sudo apt install ffmpeg yt-dlp        # Debian / Ubuntu
+```
+
+The app finds them on `PATH`, and also checks the usual package-manager
+directories (Homebrew, winget, Chocolatey, Scoop, `~/.local/bin`) for the case
+where a GUI app inherits a narrower `PATH` than your shell has. If either is
+missing, the status strip says which one and prints the command that installs
+it. Everything else the app needs — Pandoc, PDFium, whisper.cpp and its models
+— still ships inside the bundle.
+
 ---
 
 ## One tab per platform
@@ -217,10 +235,9 @@ built and both failed:
 | MSI | `LGHT0306`, CAB finalization | 2 GB, the CAB format |
 | NSIS | `error mmapping file (1955445654, 33554432)` | ~2 GB, 32-bit offsets |
 
-The full payload is about 2.6 GB: 2.2 GB of whisper, 297 MB of FFmpeg and
-yt-dlp, 186 MB of frontend. There is no configuration that fits that into one
-Windows installer, and `msi` is off the target list entirely because it cannot
-build at anything near this size.
+The full payload is about 2.4 GB: 2.2 GB of whisper, 186 MB of frontend. There
+is no configuration that fits that into one Windows installer, and `msi` is off
+the target list entirely because it cannot build at anything near this size.
 
 So the installer ships **Fast and Normal** (~1.1 GB) and the 1.5 GB
 `ggml-large-v3-turbo.bin` is side-loaded. `binaries.rs` searches the app-data
@@ -433,7 +450,23 @@ laptops whose discrete GPU is powered down.
 
 ## Prerequisites
 
-### 1. Rust toolchain
+### 1. FFmpeg and yt-dlp
+
+Not vendored, not bundled — the app spawns whatever is installed on the
+machine, in development and in a release build alike:
+
+```bash
+winget install ffmpeg yt-dlp.yt-dlp   # Windows
+brew install ffmpeg yt-dlp            # macOS
+sudo apt install ffmpeg yt-dlp        # Debian / Ubuntu
+```
+
+`ffprobe` comes with FFmpeg; the app needs both. If you would rather not have
+a system install, `npm run binaries` vendors all three into
+`src-tauri/binaries/` — the resolver checks there after `PATH`, so it works as
+a dev fallback without changing what ships.
+
+### 2. Rust toolchain
 
 ```bash
 # All platforms — https://rustup.rs
@@ -442,7 +475,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 On Windows, download and run [rustup-init.exe](https://rustup.rs) instead.
 
-### 2. Platform build dependencies
+### 3. Platform build dependencies
 
 **Windows**
 
@@ -472,7 +505,7 @@ sudo pacman -S webkit2gtk-4.1 base-devel curl wget file openssl \
   libayatana-appindicator librsvg libxdo
 ```
 
-### 3. Node.js 18+
+### 4. Node.js 18+
 
 Used only for the frontend build and the setup scripts.
 
@@ -482,9 +515,6 @@ Used only for the frontend build and the setup scripts.
 
 ```bash
 npm install
-
-# Vendor yt-dlp + ffmpeg + ffprobe for your host into src-tauri/binaries/
-npm run binaries
 
 # Vendor the segmentation models + ONNX Runtime into public/ (Remove Background)
 # ~175 MB; use `--model u2netp` for the 4.4 MB fast tier alone
@@ -505,9 +535,16 @@ npm run icon
 
 `npm run setup` runs all of the above in one go.
 
-`npm run binaries` downloads statically linked builds and names them
-`<tool>-<target-triple><ext>`, which is what Tauri's `externalBin` requires. The
-files are gitignored — they're build inputs, not source.
+FFmpeg and yt-dlp are not in that list — see
+[Prerequisites](#1-ffmpeg-and-yt-dlp). The app resolves them from `PATH` at
+runtime, so a system install is all they need.
+
+`npm run binaries` still exists for a dev machine without one. It downloads
+statically linked builds into `src-tauri/binaries/`, named
+`<tool>-<target-triple><ext>`; the resolver checks that directory after `PATH`,
+so a vendored copy is a fallback and never shadows a real install. The files
+are gitignored — build inputs, not source — and nothing in the shipped bundle
+depends on them.
 
 To vendor for a target other than your host:
 
@@ -524,9 +561,6 @@ inflated in-process rather than shelled out to `tar`, because "tar" on Windows
 is whichever one is first on `PATH`: PowerShell provides bsdtar (reads ZIP),
 while Git Bash provides GNU tar (cannot read ZIP, and parses `C:\path` as a
 remote host). Both shells are tested.
-
-At runtime the app also falls back to `PATH`, so a machine with ffmpeg and
-yt-dlp already installed works without vendoring.
 
 `npm run model` is the only step that fetches the Remove Background assets, and
 it is also the only network access that feature ever involves. Skipping it leaves
@@ -617,15 +651,15 @@ Without a Mac, build on a hosted one: `.github/workflows/macos.yml` runs these
 same commands on GitHub's Apple Silicon runner — see [Building on GitHub
 Actions](#building-on-github-actions) below.
 
-Everything *else* is ready — the sidecars are vendored and verified from any
-host, so on the Mac it is a handful of commands:
+Everything *else* is ready — Pandoc and PDFium vendor from any host, and FFmpeg
+and yt-dlp come from Homebrew on the target machine — so on the Mac it is a
+handful of commands:
 
 ```bash
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
 npm install
 npm run icon
-npm run binaries:mac        # static ffmpeg/ffprobe + universal yt-dlp, both arches
 npm run pandoc:mac          # Pandoc, both arches (General Converter documents)
 npm run pdfium:mac          # PDFium, both arches (General Converter PDF)
 
@@ -636,29 +670,31 @@ npm run build:mac-universal # one binary containing both (needs `lipo`)
 
 Artifacts land in `src-tauri/target/<triple>/release/bundle/{macos,dmg}/`.
 
-#### What gets bundled, and why it is genuinely self-contained
+#### What gets bundled
 
-`npm run binaries:mac` fetches **statically linked** binaries and refuses to
-install one that is not:
+Pandoc and PDFium, both per-arch, and nothing else. FFmpeg, FFprobe and yt-dlp
+are the user's own install — `brew install ffmpeg yt-dlp` — which takes ~190 MB
+off the DMG and hands yt-dlp's update cadence back to Homebrew, where it
+belongs.
 
-| Binary    | Source                        | Arch          | Size    |
-| --------- | ----------------------------- | ------------- | ------- |
-| `yt-dlp`  | yt-dlp `yt-dlp_macos`         | universal2    | 36.5 MB |
-| `ffmpeg`  | `eugeneware/ffmpeg-static`    | per-arch      | 43–75 MB |
-| `ffprobe` | `eugeneware/ffmpeg-static`    | per-arch      | 43–75 MB |
+That also settles a question the vendored build had to work around: Homebrew's
+ffmpeg is dynamically linked against `/opt/homebrew/lib/*.dylib`, so copying it
+into a bundle produced something that ran only on the machine that built it.
+`npm run binaries:mac` therefore fetched statically linked builds and parsed
+each Mach-O's load commands to **fail the vendoring step** if anything linked
+outside `/usr/lib` and `/System`. Resolving from `PATH` instead means the
+dynamic linking is fine — the libraries it wants are on the machine that
+installed it.
 
-The script parses each Mach-O binary's load commands and **fails the vendoring
-step** if anything links outside `/usr/lib` and `/System`. This matters: an
-earlier version copied ffmpeg from `PATH`, which on a dev machine means
-Homebrew's build — dynamically linked against `/opt/homebrew/lib/*.dylib` and
-therefore broken on every machine but the one that built it. All six binaries
-were verified to link system frameworks only.
+`VideoToolbox.framework` is a system framework, so hardware-accelerated H.264
+encoding (`h264_videotoolbox`) works with a Homebrew ffmpeg on Apple Silicon
+just as it did with the vendored one.
 
-`VideoToolbox.framework` is among them, so hardware-accelerated H.264 encoding
-(`h264_videotoolbox`) works on Apple Silicon rather than falling back to libx264.
-
-Sidecars land in `Contents/MacOS/` beside the app binary, which is the first
-place the resolver looks — no `PATH` dependency at runtime.
+One macOS-specific catch, handled in `binaries.rs`: an app launched from Finder
+inherits launchd's minimal `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), which does
+not include `/opt/homebrew/bin`. The resolver checks Homebrew's directories
+(both architectures) and MacPorts explicitly, so a Homebrew install is found
+whether the app was started from the Dock or from a shell.
 
 #### Audio → SRT is not available on macOS
 
@@ -694,8 +730,8 @@ Two constraints shaped it:
 - **macOS minutes bill at 10×** the Linux rate against a free account's monthly
   allowance, so `Swatinem/rust-cache` is in the loop to keep repeat builds
   short. Public repositories are not metered at all.
-- **The DMG is roughly half a gigabyte**, which would consume the entire 500 MB
-  artifact allowance on a free plan in one run. Tagged builds therefore go to a
+- **The DMG is a few hundred megabytes**, enough of the 500 MB free-plan
+  artifact allowance to be worth avoiding. Tagged builds therefore go to a
   release — stored separately, 2 GB per file — and manual runs keep a
   3-day artifact instead.
 
@@ -705,16 +741,16 @@ break when an image is retired.
 
 #### Minimum macOS version
 
-`minimumSystemVersion` is **12.0**, and that is not arbitrary: the arm64 ffmpeg
-build declares `LC_BUILD_VERSION minos=12.0`. Lowering it would let the app
-install on macOS 11 where ffmpeg cannot launch. (The Intel binaries and yt-dlp
-go lower — 10.13 and 11.0 — so 12.0 is set by the arm64 ffmpeg alone.)
+`minimumSystemVersion` is **12.0**. It used to be forced there by the vendored
+arm64 ffmpeg build, which declares `LC_BUILD_VERSION minos=12.0`; now that
+FFmpeg comes from the user's own install that constraint is gone, and 12.0
+stays as the floor the app is actually tested against.
 
 #### Signing
 
 Apple Silicon refuses to execute a binary with no code signature, so the
-vendoring script ad-hoc signs each sidecar (`codesign -s -`) when run on macOS.
-That is enough to run locally.
+vendoring scripts ad-hoc sign each sidecar they install (`codesign -s -`) when
+run on macOS. That is enough to run locally.
 
 To distribute to other people, sign and notarize properly — Tauri signs the
 sidecars too when an identity is present:
@@ -821,13 +857,13 @@ src-tauri/src/
   jobs.rs               Cancellation registry and progress events
   proc.rs               Cancellation-aware child-process plumbing
   ffargs.rs             Shared FFmpeg input-argument construction
-  binaries.rs           Sidecar discovery
+  binaries.rs           Tool discovery: system PATH, then bundle resources
   timecode.rs           Range validation
   error.rs              Typed errors with actionable hints
   smoke.rs              Network-backed end-to-end test (ignored by default)
 
 scripts/
-  fetch-binaries.mjs    Vendors sidecars for the host triple
+  fetch-binaries.mjs    Optional dev-only vendoring of yt-dlp/ffmpeg/ffprobe
   fetch-model.mjs       Vendors the segmentation model + ONNX Runtime into public/
   fetch-whisper.mjs     Vendors whisper.cpp + speech models into src-tauri/binaries/
   fetch-pandoc.mjs      Vendors Pandoc for the General Converter's Documents category

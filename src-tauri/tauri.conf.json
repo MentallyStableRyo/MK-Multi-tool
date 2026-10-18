@@ -35,7 +35,7 @@
     "targets": ["nsis", "app", "dmg", "deb", "rpm", "appimage"],
     "category": "Utility",
     "shortDescription": "Precision video slice downloader and local media converter",
-    "longDescription": "Paste a YouTube, Instagram, TikTok, or X link, pick an exact time range, and render just that slice locally using FFmpeg. Also cuts out image backgrounds, transcribes audio to subtitles, and converts images, audio, video, documents, and PDFs — all locally. No servers, no uploads.",
+    "longDescription": "Paste a YouTube, Instagram, TikTok, or X link, pick an exact time range, and render just that slice locally using FFmpeg. Also cuts out image backgrounds, transcribes audio to subtitles, and converts images, audio, video, documents, and PDFs — all locally. No servers, no uploads. Requires FFmpeg and yt-dlp to be installed on your system.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -44,9 +44,6 @@
       "icons/icon.ico"
     ],
     "externalBin": [
-      "binaries/yt-dlp",
-      "binaries/ffmpeg",
-      "binaries/ffprobe",
       "binaries/pandoc"
     ],
     "resources": [
